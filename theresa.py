@@ -43,6 +43,7 @@ class MSPAChecker(service.MultiService):
             return
         elif resp.code != 200:
             log.msg('strange HTTP code from MSPA: %r' % (resp.code,))
+            return
         if resp.headers.hasHeader('Last-Modified'):
             self._lastModified, = resp.headers.getRawHeaders('Last-Modified')
         streamer = LxmlStreamReceiver()
@@ -61,9 +62,10 @@ class MSPAChecker(service.MultiService):
                 break
             else:
                 prev = link, title
+        self._lastLink, = doc.xpath('/rss/channel/item[1]/link/text()')
         newLink, newTitle = prev
         _, _, newTitle = newTitle.partition(' : ')
-        targetClient = yield self.target.clientDeferred
+        targetClient = yield self.target.clientDeferred()
         targetClient.newMSPA(newLink, newTitle)
 
 class TheresaProtocol(irc.IRCClient):
@@ -103,11 +105,21 @@ class TheresaFactory(protocol.ReconnectingClientFactory):
     protocol = TheresaProtocol
 
     def __init__(self):
-        self.clientDeferred = defer.Deferred()
+        self._clientDeferred = defer.Deferred()
+        self._client = None
 
     def established(self, protocol):
-        self.clientDeferred.callback(protocol)
+        self._client = protocol
+        self._clientDeferred.callback(protocol)
         self.resetDelay()
 
     def unestablished(self):
-        self.clientDeferred = defer.Deferred()
+        self._client = None
+        self._clientDeferred = defer.Deferred()
+
+    def clientDeferred(self):
+        if self._client is not None:
+            return defer.succeed(self._client)
+        d = defer.Deferred()
+        self._clientDeferred.chainDeferred(d)
+        return d
