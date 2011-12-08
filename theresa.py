@@ -1,6 +1,6 @@
 from twisted.application import service
 from twisted.application.internet import TimerService
-from twisted.internet import task, protocol, defer, reactor
+from twisted.internet import task, protocol, defer, reactor, error
 from twisted.python import log
 from twisted.web.client import Agent, ResponseDone
 from twisted.web.http_headers import Headers
@@ -36,9 +36,13 @@ class MSPAChecker(service.MultiService):
         headers = Headers()
         if self._lastModified is not None:
             headers.addRawHeader('If-Modified-Since', self._lastModified)
-        resp = yield self.agent.request(
-           'GET', 'http://www.mspaintadventures.com/rss/rss.xml',
-           headers)
+        try:
+            resp = yield self.agent.request(
+                'GET', 'http://www.mspaintadventures.com/rss/rss.xml',
+                headers)
+        except error.TimeoutError:
+            log.msg('timeout requesting MSPA')
+            return
         if resp.code == 304:
             return
         elif resp.code != 200:
@@ -65,6 +69,7 @@ class MSPAChecker(service.MultiService):
         self._lastLink, = doc.xpath('/rss/channel/item[1]/link/text()')
         newLink, newTitle = prev
         _, _, newTitle = newTitle.partition(' : ')
+        log.msg('new MSPA: %r' % (newTitle,))
         targetClient = yield self.target.clientDeferred()
         targetClient.newMSPA(newLink, newTitle)
 
