@@ -6,9 +6,10 @@ from twisted.web.client import Agent, ResponseDone
 from twisted.web.http_headers import Headers
 from twisted.words.protocols import irc
 
-from lxml import etree
+from lxml import etree, html
 from twittytwister.twitter import Twitter
 
+import collections
 import shlex
 import re
 
@@ -29,6 +30,39 @@ class LxmlStreamReceiver(protocol.Protocol):
             self.deferred.callback(self._parser.close())
         else:
             self.deferred.errback(reason)
+
+class HtmlStreamReceiver(protocol.Protocol):
+    def __init__(self):
+        self.deferred = defer.Deferred()
+        self._buffer = []
+
+    def dataReceived(self, data):
+        self._buffer.append(data)
+
+    def connectionLost(self, reason):
+        if reason.check(ResponseDone):
+            self.deferred.callback(html.fromstring(''.join(self._buffer)))
+        else:
+            self.deferred.errback(reason)
+
+def paragraphCount(l):
+    return sum(1 for x in l if x.strip())
+
+@defer.inlineCallbacks
+def mspaCounts(agent, urls):
+    ret = collections.Counter()
+    for url in urls:
+        resp = yield agent.request('GET', url)
+        receiver = HtmlStreamReceiver()
+        resp.deliverBody(receiver)
+        doc = yield receiver.deferred
+        ret['pesterlines'] += paragraphCount(doc.xpath('//div[@class="spoiler"]//p//text()'))
+        ret['paragraphs'] += paragraphCount(doc.xpath('//td[@bgcolor="#EEEEEE"]//center/p/text()'))
+        ret['images'] += sum(1 for img in doc.xpath('//td[@bgcolor="#EEEEEE"]//img/@src') if 'storyfiles' in img)
+        ret['flashes'] += sum(1 for src in doc.xpath('//td[@bgcolor="#EEEEEE"]//script/@src') if 'storyfiles' in src)
+        ret['pages'] += 1
+
+    defer.returnValue(ret)
 
 class MSPAChecker(service.MultiService):
     def __init__(self, target):
@@ -67,6 +101,7 @@ class MSPAChecker(service.MultiService):
         resp.deliverBody(streamer)
         doc = yield streamer.deferred
         prev = None
+        newUrls = []
         for item in doc.xpath('/rss/channel/item'):
             link, = item.xpath('link/text()')
             title, = item.xpath('title/text()')
@@ -78,6 +113,7 @@ class MSPAChecker(service.MultiService):
                     return
                 break
             else:
+                newUrls.append(link)
                 prev = link, title
         self._lastLink, = doc.xpath('/rss/channel/item[1]/link/text()')
         newLink, newTitle = prev
@@ -85,6 +121,8 @@ class MSPAChecker(service.MultiService):
         log.msg('new MSPA: %r' % (newTitle,))
         targetClient = yield self.target.clientDeferred()
         targetClient.newMSPA(newLink, newTitle)
+        counts = yield mspaCounts(self.agent, newUrls)
+        targetClient.newMSPACounts(counts)
 
 class TheresaProtocol(irc.IRCClient):
     outstandingPings = 0
@@ -118,6 +156,9 @@ class TheresaProtocol(irc.IRCClient):
 
     def newMSPA(self, link, title):
         self.msg(self.channel, '%s (%s)' % (title, link))
+
+    def newMSPACounts(self, counts):
+        self.msg(self.channel, 'new: %s' % '; '.join('%s %s' % (v, k) for k, v in counts.iteritems() if v))
 
     def noticed(self, user, channel, message):
         pass
