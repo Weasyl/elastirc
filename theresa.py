@@ -7,6 +7,14 @@ from twisted.web.http_headers import Headers
 from twisted.words.protocols import irc
 
 from lxml import etree
+from twittytwister.twitter import Twitter
+
+import shlex
+import re
+
+twitter_regexp = re.compile(r'twitter\.com/#!/[^/]+/status/(\d+)')
+
+twatter = Twitter()
 
 class LxmlStreamReceiver(protocol.Protocol):
     def __init__(self):
@@ -31,8 +39,13 @@ class MSPAChecker(service.MultiService):
         self.timer.setServiceParent(self)
         self._lastModified = self._lastLink = None
 
-    @defer.inlineCallbacks
     def _doPoll(self):
+        d = self._actuallyDoPoll()
+        d.addErrback(log.err)
+        return d
+
+    @defer.inlineCallbacks
+    def _actuallyDoPoll(self):
         headers = Headers()
         if self._lastModified is not None:
             headers.addRawHeader('If-Modified-Since', self._lastModified)
@@ -105,6 +118,41 @@ class TheresaProtocol(irc.IRCClient):
 
     def newMSPA(self, link, title):
         self.msg(self.channel, '%s (%s)' % (title, link))
+
+    def noticed(self, user, channel, message):
+        pass
+
+    def privmsg(self, user, channel, message):
+        if not channel.startswith('#'):
+            return
+
+        for m in twitter_regexp.finditer(message):
+            self.showTwat(channel, m.group(1))
+
+        if not message.startswith(','):
+            return
+        splut = shlex.split(message[1:])
+        command, params = splut[0], splut[1:]
+        meth = getattr(self, 'command_%s' % (command.lower(),), None)
+        if meth is not None:
+            d = defer.maybeDeferred(meth, channel, *params)
+            @d.addErrback
+            def _eb(f):
+                self.msg(channel, 'error in %s: %s' % (command, f.getErrorMessage()))
+                return f
+            d.addErrback(log.err)
+
+    def _twatDelegate(self, channel):
+        return lambda twat: self.msg(
+            channel,
+            ('<%s> %s' % (twat.user.screen_name, twat.text)).encode('utf-8'))
+
+    def showTwat(self, channel, id):
+        return twatter.show(id, self._twatDelegate(channel))
+
+    def command_twat(self, channel, user):
+        return twatter.user_timeline(self._twatDelegate(channel), user,
+                                     params=dict(count='1', include_rts='true'))
 
 class TheresaFactory(protocol.ReconnectingClientFactory):
     protocol = TheresaProtocol
