@@ -127,7 +127,7 @@ class MSPAChecker(service.MultiService):
 def _extractTwatText(twat):
     rt = twat.retweeted_status
     if rt:
-        return u'RT @%s: %s' % (rt.text, rt.user.screen_name)
+        return u'RT @%s: %s' % (rt.user.screen_name, rt.text)
     else:
         return twat.text
 
