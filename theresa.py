@@ -124,6 +124,13 @@ class MSPAChecker(service.MultiService):
         counts = yield mspaCounts(self.agent, newUrls)
         targetClient.newMSPACounts(counts)
 
+def _extractTwatText(twat):
+    rt = twat.retweeted_status
+    if rt:
+        return u'RT @%s: %s' % (rt.text, rt.user.screen_name)
+    else:
+        return twat.text
+
 class TheresaProtocol(irc.IRCClient):
     outstandingPings = 0
     _pinger = None
@@ -186,7 +193,7 @@ class TheresaProtocol(irc.IRCClient):
     def _twatDelegate(self, channel):
         return lambda twat: self.msg(
             channel,
-            ('<%s> %s' % (twat.user.screen_name, twat.text)).encode('utf-8'))
+            ('<%s> %s' % (twat.user.screen_name, _extractTwatText(twat))).encode('utf-8'))
 
     def showTwat(self, channel, id):
         return twatter.show(id, self._twatDelegate(channel))
