@@ -167,6 +167,7 @@ class _IRCBase(irc.IRCClient):
 
 class TheresaProtocol(_IRCBase):
     _buttReady = True
+    _lastMessage = None
 
     def signedOn(self):
         self.factory.established(self)
@@ -191,6 +192,7 @@ class TheresaProtocol(_IRCBase):
             self.showTwat(channel, m.group(1))
 
         if not message.startswith(','):
+            self._lastMessage = message
             self.maybeRespondTo(channel, message)
             return
 
@@ -205,17 +207,23 @@ class TheresaProtocol(_IRCBase):
                 return f
             d.addErrback(log.err)
 
+    def buttify(self, message):
+        words = re.split(r'(\s+|-)', message)
+        buttified = False
+        for e, word in enumerate(words):
+            if word.isalnum() and len(word) <= 8 and random.randrange(7) == 0:
+                words[e] = 'butt'
+                buttified = True
+
+        if not buttified:
+            return None
+        return ''.join(words)
+
     def maybeRespondTo(self, channel, message):
         if len(message) > 30 and random.randrange(6) == 0 and self._buttReady:
-            words = re.split(r'(\s+|-)', message)
-            buttified = False
-            for e, word in enumerate(words):
-                if word.isalnum() and len(word) <= 8 and random.randrange(7) == 0:
-                    words[e] = 'butt'
-                    buttified = True
-
+            buttified = self.buttify(message)
             if buttified:
-                self.msg(channel, ''.join(words))
+                self.msg(channel, buttified)
                 self._buttReady = False
                 reactor.callLater(random.randrange(60, 300), self._becomeButtReady)
 
@@ -233,6 +241,16 @@ class TheresaProtocol(_IRCBase):
     def command_twat(self, channel, user):
         return twatter.user_timeline(self._twatDelegate(channel), user,
                                      params=dict(count='1', include_rts='true'))
+
+    def command_butt(self, channel):
+        if self._lastMessage is None:
+            self.msg(channel, 'no last message !!')
+            return
+
+        buttified = None
+        while buttified is None:
+            buttified = self.buttify(self._lastMessage)
+        self.msg(channel, buttified)
 
     def annoy(self):
         self.msg(self.channel, self.annoyMsg)
