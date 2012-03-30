@@ -15,6 +15,7 @@ import shlex
 import re
 
 twitter_regexp = re.compile(r'twitter\.com/#!/[^/]+/status/(\d+)')
+torrent_regexp = re.compile(r'-> (\S+) .*details\.php\?id=(\d+)')
 
 twatter = Twitter()
 
@@ -132,10 +133,10 @@ def _extractTwatText(twat):
     else:
         return twat.text
 
-class TheresaProtocol(irc.IRCClient):
+class _IRCBase(irc.IRCClient):
     outstandingPings = 0
     _pinger = None
-    _buttReady = True
+    nickserv_pw = None
 
     def _serverPing(self):
         if self.outstandingPings > 5:
@@ -147,15 +148,13 @@ class TheresaProtocol(irc.IRCClient):
         self.outstandingPings -= 1
 
     def signedOn(self):
-        self.factory.established(self)
-        self.msg('nickserv', 'identify %s' % self.nickserv_pw)
-        self.join(self.channel)
         self._pinger = task.LoopingCall(self._serverPing)
         self._pinger.start(60)
+        if self.nickserv_pw is not None:
+            self.msg('nickserv', 'identify %s' % self.nickserv_pw)
 
     def connectionLost(self, reason):
         irc.IRCClient.connectionLost(self, reason)
-        self.factory.unestablished()
         if self._pinger is not None:
             self._pinger.stop()
 
@@ -163,14 +162,26 @@ class TheresaProtocol(irc.IRCClient):
         messages = [(a.upper(), b) for a, b in messages]
         irc.IRCClient.ctcpQuery(self, user, channel, messages)
 
+    def noticed(self, user, channel, message):
+        pass
+
+class TheresaProtocol(_IRCBase):
+    _buttReady = True
+
+    def signedOn(self):
+        self.factory.established(self)
+        self.join(self.channel)
+        _IRCBase.signedOn(self)
+
+    def connectionLost(self, reason):
+        _IRCBase.connectionLost(self, reason)
+        self.factory.unestablished()
+
     def newMSPA(self, link, title):
         self.msg(self.channel, '%s (%s)' % (title, link))
 
     def newMSPACounts(self, counts):
         self.msg(self.channel, 'new: %s' % '; '.join('%s %s' % (v, k) for k, v in counts.iteritems() if v))
-
-    def noticed(self, user, channel, message):
-        pass
 
     def privmsg(self, user, channel, message):
         if not channel.startswith('#'):
@@ -223,6 +234,12 @@ class TheresaProtocol(irc.IRCClient):
         return twatter.user_timeline(self._twatDelegate(channel), user,
                                      params=dict(count='1', include_rts='true'))
 
+    def annoy(self):
+        self.msg(self.channel, self.annoyMsg)
+
+    def thank(self):
+        self.msg(self.channel, self.thankMsg)
+
 class TheresaFactory(protocol.ReconnectingClientFactory):
     protocol = TheresaProtocol
 
@@ -245,3 +262,51 @@ class TheresaFactory(protocol.ReconnectingClientFactory):
         d = defer.Deferred()
         self._clientDeferred.chainDeferred(d)
         return d
+
+class TheresaSceneProtocol(_IRCBase):
+    apiKey = None
+    annoy = False
+
+    def signedOn(self):
+        _IRCBase.signedOn(self)
+        self.factory.resetDelay()
+        self._joinedDeferred = defer.Deferred()
+        if self.annoy:
+            self._annoyOtherChannel().addErrback(log.err)
+
+    @defer.inlineCallbacks
+    def _annoyOtherChannel(self):
+        prot = yield self.factory.target.clientDeferred()
+        prot.annoy()
+        yield self._joinedDeferred
+        prot.thank()
+
+    def joined(self, channel):
+        if channel == '#announce':
+            self._joinedDeferred.callback(None)
+
+    def isRelevant(self, name):
+        return False
+
+    def startDownload(self, url):
+        return defer.succeed(None)
+
+    def privmsg(self, user, channel, message):
+        if channel != '#announce':
+            return
+
+        m = torrent_regexp.search(message)
+        if not m:
+            return
+        name, id = m.groups()
+        if not self.isRelevant(name):
+            return
+        url = 'http://sceneaccess.org/download/%s/%s/%s.torrent' % (id, self.apiKey, name)
+        self.startDownload(url).addErrback(log.err)
+
+class TheresaSceneFactory(protocol.ReconnectingClientFactory):
+    protocol = TheresaSceneProtocol
+
+    def __init__(self, target):
+        self.target = target
+
