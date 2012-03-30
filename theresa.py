@@ -10,6 +10,7 @@ from lxml import etree, html
 from twittytwister.twitter import Twitter
 
 import collections
+import random
 import shlex
 import re
 
@@ -134,6 +135,7 @@ def _extractTwatText(twat):
 class TheresaProtocol(irc.IRCClient):
     outstandingPings = 0
     _pinger = None
+    _buttReady = True
 
     def _serverPing(self):
         if self.outstandingPings > 5:
@@ -178,7 +180,9 @@ class TheresaProtocol(irc.IRCClient):
             self.showTwat(channel, m.group(1))
 
         if not message.startswith(','):
+            self.maybeRespondTo(channel, message)
             return
+
         splut = shlex.split(message[1:])
         command, params = splut[0], splut[1:]
         meth = getattr(self, 'command_%s' % (command.lower(),), None)
@@ -189,6 +193,23 @@ class TheresaProtocol(irc.IRCClient):
                 self.msg(channel, 'error in %s: %s' % (command, f.getErrorMessage()))
                 return f
             d.addErrback(log.err)
+
+    def maybeRespondTo(self, channel, message):
+        if len(message) > 30 and random.randrange(20) == 0 and self._buttReady:
+            words = re.split(r'(\s+|-)', message)
+            buttified = False
+            for e, word in enumerate(words):
+                if word.isalnum() and len(word) <= 8 and random.randrange(7) == 0:
+                    words[e] = 'butt'
+                    buttified = True
+
+            if buttified:
+                self.msg(channel, ''.join(words))
+                self._buttReady = False
+                reactor.callLater(random.randrange(60, 300), self._becomeButtReady)
+
+    def _becomeButtReady(self):
+        self._buttReady = True
 
     def _twatDelegate(self, channel):
         return lambda twat: self.msg(
