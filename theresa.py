@@ -195,7 +195,7 @@ class TheresaProtocol(irc.IRCClient):
             d.addErrback(log.err)
 
     def maybeRespondTo(self, channel, message):
-        if len(message) > 30 and random.randrange(20) == 0 and self._buttReady:
+        if len(message) > 30 and random.randrange(6) == 0 and self._buttReady:
             words = re.split(r'(\s+|-)', message)
             buttified = False
             for e, word in enumerate(words):
