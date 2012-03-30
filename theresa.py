@@ -14,6 +14,9 @@ import random
 import shlex
 import re
 
+def isWord(word, _pat=re.compile(r"[a-zA-Z']+$")):
+    return _pat.match(word) is not None
+
 twitter_regexp = re.compile(r'twitter\.com/#!/[^/]+/status/(\d+)')
 torrent_regexp = re.compile(r'-> (\S+) .*details\.php\?id=(\d+)')
 
@@ -208,10 +211,10 @@ class TheresaProtocol(_IRCBase):
             d.addErrback(log.err)
 
     def buttify(self, message):
-        words = re.split(r'(\s+|-)', message)
+        words = re.split(r'(\s+|[,.!;:()-])', message)
         buttified = False
         for e, word in enumerate(words):
-            if word.isalnum() and len(word) <= 8 and random.randrange(7) == 0:
+            if isWord(word) and len(word) <= 8 and random.randrange(7) == 0:
                 words[e] = 'butt'
                 buttified = True
 
@@ -248,9 +251,11 @@ class TheresaProtocol(_IRCBase):
             return
 
         buttified = None
-        while buttified is None:
+        for x in xrange(255):
             buttified = self.buttify(self._lastMessage)
-        self.msg(channel, buttified)
+            if buttified is not None:
+                break
+        self.msg(channel, buttified or 'could not buttify :(')
 
     def annoy(self):
         self.msg(self.channel, self.annoyMsg)
