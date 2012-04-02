@@ -214,8 +214,11 @@ class TheresaProtocol(_IRCBase):
         words = re.split(r'(\s+|[,.!;:()-])', message)
         buttified = False
         for e, word in enumerate(words):
-            if isWord(word) and len(word) <= 8 and random.randrange(7) == 0:
+            if word == 'monqy':
                 words[e] = 'butt'
+                buttified = True
+            elif isWord(word) and len(word) <= 8 and random.randrange(7) == 0:
+                words[e] = random.choice(['butt', 'boner'])
                 buttified = True
 
         if not buttified:
