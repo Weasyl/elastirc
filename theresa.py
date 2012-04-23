@@ -211,11 +211,14 @@ class TheresaProtocol(_IRCBase):
             d.addErrback(log.err)
 
     def buttify(self, message):
-        words = re.split(r'(\s+|[,.!;:()-])', message)
+        words = re.split(r'(\s+|[,.!;:()<>+@-])', message)
         buttified = False
         for e, word in enumerate(words):
             if word == 'monqy':
                 words[e] = 'butt'
+                buttified = True
+            elif word == 'monky':
+                words[e] = 'boner'
                 buttified = True
             elif isWord(word) and len(word) <= 8 and random.randrange(7) == 0:
                 words[e] = random.choice(['butt', 'boner'])
@@ -231,7 +234,16 @@ class TheresaProtocol(_IRCBase):
             if buttified:
                 self.msg(channel, buttified)
                 self._buttReady = False
-                reactor.callLater(random.randrange(60, 300), self._becomeButtReady)
+                reactor.callLater(random.randrange(600, 3000), self._becomeButtReady)
+                return
+
+        if 'literally' in message.lower() and 'LITERALLY' not in message:
+            self.msg(channel, 'LITERALLY')
+            return
+
+        if 'strong' in message.lower() and 'STRONG' not in message:
+            strong = re.sub(r'(?i)\b\w*strong\w*\b', lambda m: m.group(0).upper(), message)
+            self.msg(channel, strong)
 
     def _becomeButtReady(self):
         self._buttReady = True
