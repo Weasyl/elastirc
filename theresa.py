@@ -143,7 +143,7 @@ class _IRCBase(irc.IRCClient):
 
     def _serverPing(self):
         if self.outstandingPings > 5:
-            self.loseConnection()
+            self.transport.loseConnection()
         self.sendLine('PING bollocks')
         self.outstandingPings += 1
 
