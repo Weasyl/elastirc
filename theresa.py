@@ -17,7 +17,7 @@ import re
 def isWord(word, _pat=re.compile(r"[a-zA-Z']+$")):
     return _pat.match(word) is not None
 
-twitter_regexp = re.compile(r'twitter\.com/#!/[^/]+/status/(\d+)')
+twitter_regexp = re.compile(r'twitter\.com/(?:#!/)?[^/]+/status/(\d+)')
 torrent_regexp = re.compile(r'-> (\S+) .*details\.php\?id=(\d+)')
 
 twatter = Twitter()
@@ -36,7 +36,7 @@ class LxmlStreamReceiver(protocol.Protocol):
         else:
             self.deferred.errback(reason)
 
-class HtmlStreamReceiver(protocol.Protocol):
+class StringReceiver(protocol.Protocol):
     def __init__(self):
         self.deferred = defer.Deferred()
         self._buffer = []
@@ -46,7 +46,7 @@ class HtmlStreamReceiver(protocol.Protocol):
 
     def connectionLost(self, reason):
         if reason.check(ResponseDone):
-            self.deferred.callback(html.fromstring(''.join(self._buffer)))
+            self.deferred.callback(''.join(self._buffer))
         else:
             self.deferred.errback(reason)
 
@@ -58,9 +58,9 @@ def mspaCounts(agent, urls):
     ret = collections.Counter()
     for url in urls:
         resp = yield agent.request('GET', url)
-        receiver = HtmlStreamReceiver()
+        receiver = StringReceiver()
         resp.deliverBody(receiver)
-        doc = yield receiver.deferred
+        doc = html.fromstring((yield receiver.deferred))
         ret['pesterlines'] += paragraphCount(doc.xpath('//div[@class="spoiler"]//p//text()'))
         ret['paragraphs'] += paragraphCount(doc.xpath('//td[@bgcolor="#EEEEEE"]//center/p/text()'))
         ret['images'] += sum(1 for img in doc.xpath('//td[@bgcolor="#EEEEEE"]//img/@src') if 'storyfiles' in img)
@@ -170,7 +170,7 @@ class _IRCBase(irc.IRCClient):
 
 class TheresaProtocol(_IRCBase):
     _buttReady = True
-    _lastMessage = None
+    warnMessage = None
 
     def signedOn(self):
         self.factory.established(self)
@@ -195,8 +195,6 @@ class TheresaProtocol(_IRCBase):
             self.showTwat(channel, m.group(1))
 
         if not message.startswith(','):
-            self._lastMessage = message
-            self.maybeRespondTo(channel, message)
             return
 
         splut = shlex.split(message[1:])
@@ -222,22 +220,21 @@ class TheresaProtocol(_IRCBase):
         return twatter.user_timeline(self._twatDelegate(channel), user,
                                      params=dict(count='1', include_rts='true'))
 
-    def annoy(self):
-        self.msg(self.channel, self.annoyMsg)
-
-    def thank(self):
-        self.msg(self.channel, self.thankMsg)
+    def warn(self):
+        if self.warnMessage:
+            self.msg(self.channel, self.warnMessage)
 
 class TheresaFactory(protocol.ReconnectingClientFactory):
     protocol = TheresaProtocol
 
     def __init__(self):
-        self._clientDeferred = defer.Deferred()
         self._client = None
+        self._waiting = []
 
     def established(self, protocol):
         self._client = protocol
-        self._clientDeferred.callback(protocol)
+        for d in self._waiting:
+            d.callback(protocol)
         self.resetDelay()
 
     def unestablished(self):
@@ -248,30 +245,30 @@ class TheresaFactory(protocol.ReconnectingClientFactory):
         if self._client is not None:
             return defer.succeed(self._client)
         d = defer.Deferred()
-        self._clientDeferred.chainDeferred(d)
+        self._waiting.append(d)
         return d
 
 class TheresaSceneProtocol(_IRCBase):
     apiKey = None
-    annoy = False
+    warningInterval = 20 * 60
+    warningCall = None
 
     def signedOn(self):
         _IRCBase.signedOn(self)
         self.factory.resetDelay()
-        self._joinedDeferred = defer.Deferred()
-        if self.annoy:
-            self._annoyOtherChannel().addErrback(log.err)
+        self._resetWarning()
 
-    @defer.inlineCallbacks
-    def _annoyOtherChannel(self):
-        prot = yield self.factory.target.clientDeferred()
-        prot.annoy()
-        yield self._joinedDeferred
-        prot.thank()
+    def _resetWarning(self):
+        if self.warningCall is None:
+            self.warningCall = reactor.callLater(self.warningInterval, self._warn)
+        else:
+            self.warningCall.reset(self.warningInterval)
 
-    def joined(self, channel):
-        if channel == '#announce':
-            self._joinedDeferred.callback(None)
+    def _warn(self):
+        d = self.factory.target.clientDeferred()
+        d.addCallback(lambda p: p.warn())
+        d.addErrback(log.err)
+        self.warningCall = None
 
     def isRelevant(self, name):
         return False
@@ -286,6 +283,7 @@ class TheresaSceneProtocol(_IRCBase):
         m = torrent_regexp.search(message)
         if not m:
             return
+        self._resetWarning()
         name, id = m.groups()
         if not self.isRelevant(name):
             return
