@@ -17,7 +17,7 @@ import re
 def isWord(word, _pat=re.compile(r"[a-zA-Z']+$")):
     return _pat.match(word) is not None
 
-twitter_regexp = re.compile(r'twitter\.com/(?:#!/)?[^/]+/status/(\d+)')
+twitter_regexp = re.compile(r'twitter\.com/(?:#!/)?[^/]+/status(?:es)?/(\d+)')
 torrent_regexp = re.compile(r'-> (\S+) .*details\.php\?id=(\d+)')
 
 twatter = Twitter()
