@@ -3,6 +3,7 @@ from twisted.application.internet import TimerService
 from twisted.internet import task, protocol, defer, reactor, error
 from twisted.python import log
 from twisted.web.client import Agent, ResponseDone
+from twisted.web.http import PotentialDataLoss
 from twisted.web.http_headers import Headers
 from twisted.words.protocols import irc
 
@@ -45,10 +46,14 @@ class StringReceiver(protocol.Protocol):
         self._buffer.append(data)
 
     def connectionLost(self, reason):
-        if reason.check(ResponseDone):
+        if reason.check(ResponseDone, PotentialDataLoss):
             self.deferred.callback(''.join(self._buffer))
         else:
             self.deferred.errback(reason)
+
+def receive(response, receiver):
+    response.deliverBody(receiver)
+    return receiver.deferred
 
 def paragraphCount(l):
     return sum(1 for x in l if x.strip())
@@ -58,9 +63,7 @@ def mspaCounts(agent, urls):
     ret = collections.Counter()
     for url in urls:
         resp = yield agent.request('GET', url)
-        receiver = StringReceiver()
-        resp.deliverBody(receiver)
-        doc = html.fromstring((yield receiver.deferred))
+        doc = html.fromstring((yield receive(resp, StringReceiver())))
         ret['pesterlines'] += paragraphCount(doc.xpath('//div[@class="spoiler"]//p//text()'))
         ret['paragraphs'] += paragraphCount(doc.xpath('//td[@bgcolor="#EEEEEE"]//center/p/text()'))
         ret['images'] += sum(1 for img in doc.xpath('//td[@bgcolor="#EEEEEE"]//img/@src') if 'storyfiles' in img)
@@ -102,9 +105,7 @@ class MSPAChecker(service.MultiService):
             return
         if resp.headers.hasHeader('Last-Modified'):
             self._lastModified, = resp.headers.getRawHeaders('Last-Modified')
-        streamer = LxmlStreamReceiver()
-        resp.deliverBody(streamer)
-        doc = yield streamer.deferred
+        doc = yield receive(resp, LxmlStreamReceiver())
         prev = None
         newUrls = []
         for item in doc.xpath('/rss/channel/item'):
