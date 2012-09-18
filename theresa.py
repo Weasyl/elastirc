@@ -211,7 +211,7 @@ class TheresaProtocol(_IRCBase):
     def _twatDelegate(self, channel):
         return lambda twat: self.msg(
             channel,
-            ('<%s> %s' % (twat.user.screen_name, _extractTwatText(twat))).encode('utf-8'))
+            ('\x02<%s>\x02 %s' % (twat.user.screen_name, _extractTwatText(twat))).encode('utf-8'))
 
     def showTwat(self, channel, id):
         return self.factory.twatter.show(id, self._twatDelegate(channel))
