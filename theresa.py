@@ -20,7 +20,7 @@ def isWord(word, _pat=re.compile(r"[a-zA-Z']+$")):
 twitter_regexp = re.compile(r'twitter\.com/(?:#!/)?[^/]+/status(?:es)?/(\d+)')
 torrent_regexp = re.compile(r'-> (\S+) .*details\.php\?id=(\d+)')
 
-twatter = Twitter()
+default_twatter = Twitter()
 
 class LxmlStreamReceiver(protocol.Protocol):
     def __init__(self):
@@ -130,7 +130,7 @@ class MSPAChecker(service.MultiService):
         targetClient.newMSPACounts(counts)
 
 def _extractTwatText(twat):
-    rt = twat.retweeted_status
+    rt = getattr(twat, 'retweeted_status', None)
     if rt:
         return u'RT @%s: %s' % (rt.user.screen_name, rt.text)
     else:
@@ -173,9 +173,9 @@ class TheresaProtocol(_IRCBase):
     warnMessage = None
 
     def signedOn(self):
-        self.factory.established(self)
         self.join(self.channel)
         _IRCBase.signedOn(self)
+        self.factory.established(self)
 
     def connectionLost(self, reason):
         _IRCBase.connectionLost(self, reason)
@@ -214,11 +214,11 @@ class TheresaProtocol(_IRCBase):
             ('<%s> %s' % (twat.user.screen_name, _extractTwatText(twat))).encode('utf-8'))
 
     def showTwat(self, channel, id):
-        return twatter.show(id, self._twatDelegate(channel))
+        return self.factory.twatter.show(id, self._twatDelegate(channel))
 
     def command_twat(self, channel, user):
-        return twatter.user_timeline(self._twatDelegate(channel), user,
-                                     params=dict(count='1', include_rts='true'))
+        return self.factory.twatter.user_timeline(
+            self._twatDelegate(channel), user, params=dict(count='1', include_rts='true'))
 
     def warn(self):
         if self.warnMessage:
@@ -227,7 +227,8 @@ class TheresaProtocol(_IRCBase):
 class TheresaFactory(protocol.ReconnectingClientFactory):
     protocol = TheresaProtocol
 
-    def __init__(self):
+    def __init__(self, twatter=default_twatter):
+        self.twatter = twatter
         self._client = None
         self._waiting = []
 
