@@ -11,7 +11,7 @@ from lxml import etree, html
 from twittytwister.twitter import Twitter
 
 import collections
-import random
+import traceback
 import shlex
 import re
 
@@ -54,6 +54,42 @@ class StringReceiver(protocol.Protocol):
 def receive(response, receiver):
     response.deliverBody(receiver)
     return receiver.deferred
+
+redirectsToFollow = {301, 302, 303, 307}
+@defer.inlineCallbacks
+def urlInfo(agent, url, redirectFollowCount=3):
+    results = [url]
+    try:
+        for _ in xrange(redirectFollowCount):
+            resp = yield agent.request('GET', url)
+            if resp.code in redirectsToFollow:
+                url = resp.headers.getRawHeaders('location')[0]
+                results.append('%d: %s' % (resp.code, url))
+                continue
+            elif resp.code == 200:
+                content_type = resp.headers.getRawHeaders('content-type')[0].split(';')[0]
+                result = '%d: %s' % (resp.code, content_type)
+                if content_type == 'text/html':
+                    doc = html.fromstring((yield receive(resp, StringReceiver())))
+                    title_nodes = doc.xpath('//title/text()')
+                    if title_nodes:
+                        result = '%s -- %s' % (result, title_nodes[0])
+                results.append(result)
+                break
+            else:
+                results.append(str(resp.code))
+                break
+    except:
+        log.err(None, 'error in URL info for %r' % (urlInfo,))
+        results.append(traceback.format_exc(limit=0).splitlines()[-1])
+    defer.returnValue(' => '.join(results))
+
+urlRegex = re.compile(
+    u'(?i)\\b((?:[a-z][\\w-]+:(?:/{1,3}|[a-z0-9%])|www\\d{0,3}[.]|[a-z0-9.\\-]'
+    u'+[.][a-z]{2,4}/)(?:[^\\s()<>]+|\\(([^\\s()<>]+|(\\([^\\s()<>]+\\)))*\\))'
+    u'+(?:\\(([^\\s()<>]+|(\\([^\\s()<>]+\\)))*\\)|[^\\s`!()\\[\\]{};:\'".,<>?'
+    u'\xab\xbb\u201c\u201d\u2018\u2019]))'
+)
 
 def paragraphCount(l):
     return sum(1 for x in l if x.strip())
@@ -173,6 +209,9 @@ class TheresaProtocol(_IRCBase):
     _buttReady = True
     warnMessage = None
 
+    def __init__(self):
+        self.agent = Agent(reactor)
+
     def signedOn(self):
         self.join(self.channel)
         _IRCBase.signedOn(self)
@@ -181,6 +220,11 @@ class TheresaProtocol(_IRCBase):
     def connectionLost(self, reason):
         _IRCBase.connectionLost(self, reason)
         self.factory.unestablished()
+
+    def showURLInfo(self, channel, url):
+        d = urlInfo(self.agent, url)
+        d.addCallback(lambda r: self.msg(channel, r.encode('utf-8')))
+        d.addErrback(log.err)
 
     def newMSPA(self, link, title):
         self.msg(self.channel, '%s (%s)' % (title, link))
@@ -192,8 +236,13 @@ class TheresaProtocol(_IRCBase):
         if not channel.startswith('#'):
             return
 
-        for m in twitter_regexp.finditer(message):
-            self.showTwat(channel, m.group(1))
+        for m in urlRegex.finditer(message):
+            url = m.group(0)
+            twitter_match = twitter_regexp.search(url)
+            if twitter_match:
+                self.showTwat(channel, twitter_match.group(1))
+            else:
+                self.showURLInfo(channel, url)
 
         if not message.startswith(','):
             return
