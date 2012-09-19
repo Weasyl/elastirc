@@ -252,7 +252,7 @@ class TheresaProtocol(_IRCBase):
             if twitter_match:
                 self.showTwat(channel, twitter_match.group(1))
             else:
-                if not url.startswith('http://'):
+                if not url.startswith(('http://', 'https://')):
                     url = 'http://' + url
                 self.showURLInfo(channel, url)
 
