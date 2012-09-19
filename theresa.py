@@ -73,9 +73,10 @@ def urlInfo(agent, url, redirectFollowCount=3, fullInfo=True):
                     doc = html.fromstring((yield receive(resp, StringReceiver())))
                     title_nodes = doc.xpath('//title/text()')
                     if title_nodes:
+                        title = ' '.join(title_nodes[0].split())
                         if not fullInfo:
-                            defer.returnValue('title: %s' % (title_nodes[0],))
-                        result = '%s -- %s' % (result, title_nodes[0])
+                            defer.returnValue('title: %s' % (title,))
+                        result = '%s -- %s' % (result, title)
                 results.append(result)
                 break
             else:
