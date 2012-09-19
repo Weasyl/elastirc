@@ -57,7 +57,7 @@ def receive(response, receiver):
 
 redirectsToFollow = {301, 302, 303, 307}
 @defer.inlineCallbacks
-def urlInfo(agent, url, redirectFollowCount=3):
+def urlInfo(agent, url, redirectFollowCount=3, fullInfo=True):
     results = [url]
     try:
         for _ in xrange(redirectFollowCount):
@@ -73,15 +73,19 @@ def urlInfo(agent, url, redirectFollowCount=3):
                     doc = html.fromstring((yield receive(resp, StringReceiver())))
                     title_nodes = doc.xpath('//title/text()')
                     if title_nodes:
+                        if not fullInfo:
+                            defer.returnValue('title: %s' % (title_nodes[0],))
                         result = '%s -- %s' % (result, title_nodes[0])
                 results.append(result)
                 break
             else:
                 results.append(str(resp.code))
                 break
-    except:
+    except Exception:
         log.err(None, 'error in URL info for %r' % (urlInfo,))
         results.append(traceback.format_exc(limit=0).splitlines()[-1])
+    if not fullInfo:
+        defer.returnValue(None)
     defer.returnValue(' => '.join(results))
 
 urlRegex = re.compile(
@@ -208,6 +212,7 @@ class _IRCBase(irc.IRCClient):
 class TheresaProtocol(_IRCBase):
     _buttReady = True
     warnMessage = None
+    _lastURL = None
 
     def __init__(self):
         self.agent = Agent(reactor)
@@ -221,10 +226,14 @@ class TheresaProtocol(_IRCBase):
         _IRCBase.connectionLost(self, reason)
         self.factory.unestablished()
 
-    def showURLInfo(self, channel, url):
-        d = urlInfo(self.agent, url)
-        d.addCallback(lambda r: self.msg(channel, r.encode('utf-8')))
+    def showURLInfo(self, channel, url, fullInfo=False):
+        d = urlInfo(self.agent, url, fullInfo=fullInfo)
+        @d.addCallback
+        def _cb(r):
+            if r is not None:
+                self.msg(channel, r.encode('utf-8'))
         d.addErrback(log.err)
+        self._lastURL = url
 
     def newMSPA(self, link, title):
         self.msg(self.channel, '%s (%s)' % (title, link))
@@ -242,6 +251,8 @@ class TheresaProtocol(_IRCBase):
             if twitter_match:
                 self.showTwat(channel, twitter_match.group(1))
             else:
+                if not url.startswith('http://'):
+                    url = 'http://' + url
                 self.showURLInfo(channel, url)
 
         if not message.startswith(','):
@@ -269,6 +280,11 @@ class TheresaProtocol(_IRCBase):
     def command_twat(self, channel, user):
         return self.factory.twatter.user_timeline(
             self._twatDelegate(channel), user, params=dict(count='1', include_rts='true'))
+
+    def command_url(self, channel, url=None):
+        if url is None:
+            url = self._lastURL
+        self.showURLInfo(channel, url, fullInfo=True)
 
     def warn(self):
         if self.warnMessage:
