@@ -7,8 +7,9 @@ from twisted.web.http import PotentialDataLoss
 from twisted.web.http_headers import Headers
 from twisted.words.protocols import irc
 
-from lxml import etree, html
 from twittytwister.twitter import Twitter
+from BeautifulSoup import BeautifulSoup
+from lxml import etree, html
 
 import collections
 import traceback
@@ -70,20 +71,19 @@ def urlInfo(agent, url, redirectFollowCount=3, fullInfo=True):
                 content_type = resp.headers.getRawHeaders('content-type')[0].split(';')[0]
                 result = '%d: %s' % (resp.code, content_type)
                 if content_type == 'text/html':
-                    doc = html.fromstring((yield receive(resp, StringReceiver())))
-                    title_nodes = doc.xpath('//title/text()')
-                    if title_nodes:
-                        title = ' '.join(title_nodes[0].split())
+                    doc = BeautifulSoup((yield receive(resp, StringReceiver())))
+                    title_obj = doc.title
+                    if title_obj:
                         if not fullInfo:
-                            defer.returnValue('title: %s' % (title,))
-                        result = '%s -- %s' % (result, title)
+                            defer.returnValue('title: %s' % (title_obj.string,))
+                        result = '%s -- %s' % (result, title_obj.string)
                 results.append(result)
                 break
             else:
                 results.append(str(resp.code))
                 break
     except Exception:
-        log.err(None, 'error in URL info for %r' % (urlInfo,))
+        log.err(None, 'error in URL info for %r' % (url,))
         results.append(traceback.format_exc(limit=0).splitlines()[-1])
     if not fullInfo:
         defer.returnValue(None)
@@ -214,12 +214,16 @@ class TheresaProtocol(_IRCBase):
     _buttReady = True
     warnMessage = None
     _lastURL = None
+    channel = None
+    channels = None
 
     def __init__(self):
         self.agent = Agent(reactor)
+        if self.channels is None:
+            self.channels = self.channel,
 
     def signedOn(self):
-        self.join(self.channel)
+        self.join(','.join(self.channels))
         _IRCBase.signedOn(self)
         self.factory.established(self)
 
@@ -237,10 +241,12 @@ class TheresaProtocol(_IRCBase):
         self._lastURL = url
 
     def newMSPA(self, link, title):
-        self.msg(self.channel, '%s (%s)' % (title, link))
+        for channel in self.channels:
+            self.msg(channel, '%s (%s)' % (title, link))
 
     def newMSPACounts(self, counts):
-        self.msg(self.channel, 'new: %s' % '; '.join('%s %s' % (v, k) for k, v in counts.iteritems() if v))
+        for channel in self.channels:
+            self.msg(channel, 'new: %s' % '; '.join('%s %s' % (v, k) for k, v in counts.iteritems() if v))
 
     def privmsg(self, user, channel, message):
         if not channel.startswith('#'):
@@ -270,17 +276,20 @@ class TheresaProtocol(_IRCBase):
                 return f
             d.addErrback(log.err)
 
-    def _twatDelegate(self, channel):
-        return lambda twat: self.msg(
-            channel,
-            ('\x02<%s>\x02 %s' % (twat.user.screen_name, _extractTwatText(twat))).encode('utf-8'))
+    def _twatDelegate(self, channels):
+        def _actualTwatDelegate(twat):
+            for channel in channels:
+                self.msg(
+                    channel,
+                    ('\x02<%s>\x02 %s' % (twat.user.screen_name, _extractTwatText(twat))).encode('utf-8'))
+        return _actualTwatDelegate
 
     def showTwat(self, channel, id):
-        return self.factory.twatter.show(id, self._twatDelegate(channel))
+        return self.factory.twatter.show(id, self._twatDelegate([channel]))
 
     def command_twat(self, channel, user):
         return self.factory.twatter.user_timeline(
-            self._twatDelegate(channel), user, params=dict(count='1', include_rts='true'))
+            self._twatDelegate([channel]), user, params=dict(count='1', include_rts='true'))
 
     def command_url(self, channel, url=None):
         if url is None:
@@ -289,7 +298,8 @@ class TheresaProtocol(_IRCBase):
 
     def warn(self):
         if self.warnMessage:
-            self.msg(self.channel, self.warnMessage)
+            for channel in self.channels:
+                self.msg(channel, self.warnMessage)
 
 class TheresaFactory(protocol.ReconnectingClientFactory):
     protocol = TheresaProtocol
@@ -363,4 +373,3 @@ class TheresaSceneFactory(protocol.ReconnectingClientFactory):
 
     def __init__(self, target):
         self.target = target
-
