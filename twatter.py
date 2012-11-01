@@ -81,6 +81,7 @@ def extractRealTwatText(twat):
     replacements = sorted(
         (entity['indices'], entity[replacement])
         for entityType, replacement in entityReplacements
+        if entityType in twat['entities']
         for entity in twat['entities'][entityType])
     mutableText = list(twat['text'])
     for (l, r), replacement in reversed(replacements):
