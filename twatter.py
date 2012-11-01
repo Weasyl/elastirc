@@ -60,14 +60,22 @@ class TwitterStream(LineOnlyReceiver, TimeoutMixin):
     "Receive a stream of JSON in twitter's weird streaming format."
     def __init__(self, delegate, timeoutPeriod=60):
         self.delegate = delegate
+        self.timeoutPeriod = timeoutPeriod
         self.deferred = defer.Deferred(self._cancel)
-        self.setTimeout(timeoutPeriod)
         self._done = False
+
+    def connectionMade(self):
+        "Start the timeout once the connection has been established."
+        self.setTimeout(self.timeoutPeriod)
+        LineOnlyReceiver.connectionMade(self)
 
     def _cancel(self, ign):
         "A Deferred canceler that drops the connection."
+        if self._done:
+            return
         self._done = True
         self.transport.stopProducing()
+        self.deferred.errback(defer.CancelledError())
 
     def dataReceived(self, data):
         "Reset the timeout and parse the received data."
@@ -86,6 +94,8 @@ class TwitterStream(LineOnlyReceiver, TimeoutMixin):
 
     def timeoutConnection(self):
         "We haven't received data in too long, so drop the connection."
+        if self._done:
+            return
         self._done = True
         self.transport.stopProducing()
         self.deferred.errback(TimeoutError())
@@ -95,6 +105,7 @@ class TwitterStream(LineOnlyReceiver, TimeoutMixin):
         self.setTimeout(None)
         if self._done:
             return
+        self._done = True
         if reason.check(ResponseDone, PotentialDataLoss):
             self.deferred.callback(None)
         else:
