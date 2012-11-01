@@ -22,7 +22,10 @@ class Theresa(theresa.TheresaProtocol):
 
     def signedOn(self):
         theresa.TheresaProtocol.signedOn(self)
-        self.factory.twatter.stream('user.json', self.streamDelegate).addErrback(log.err)
+        self.streamDone = self.factory.twatter.stream('user.json', self.streamDelegate).addErrback(log.err)
+
+    def connectionLost(self, reason):
+        self.streamDone.cancel()
 
 class TheresaFactory(theresa.TheresaFactory):
     protocol = Theresa

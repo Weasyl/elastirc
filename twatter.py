@@ -1,6 +1,8 @@
 "I HATE TWITTER"
+from twisted.protocols.policies import TimeoutMixin
 from twisted.web.http_headers import Headers
 from twisted.protocols.basic import LineOnlyReceiver
+from twisted.internet.error import TimeoutError
 from twisted.web.client import ResponseDone
 from twisted.web.http import PotentialDataLoss
 from twisted.internet import defer
@@ -53,11 +55,23 @@ class OAuthAgent(object):
         uri = urlparse.urlunparse(parsed._replace(query=urllib.urlencode(parameters)))
         return self.agent.request(method, uri, headers, bodyProducer)
 
-class TwitterStream(LineOnlyReceiver):
+class TwitterStream(LineOnlyReceiver, TimeoutMixin):
     "Receive a stream of JSON in twitter's weird streaming format."
-    def __init__(self, delegate):
+    def __init__(self, delegate, timeoutPeriod=60):
         self.delegate = delegate
-        self.deferred = defer.Deferred()
+        self.deferred = defer.Deferred(self._cancel)
+        self.setTimeout(timeoutPeriod)
+        self._done = False
+
+    def _cancel(self, ign):
+        "A Deferred canceler that drops the connection."
+        self._done = True
+        self.transport.stopProducing()
+
+    def dataReceived(self, data):
+        "Reset the timeout and parse the received data."
+        self.resetTimeout()
+        LineOnlyReceiver.dataReceived(self, data)
 
     def lineReceived(self, line):
         "Ignoring empty-line keepalives, inform the delegate about new data."
@@ -65,8 +79,17 @@ class TwitterStream(LineOnlyReceiver):
             return
         self.delegate(json.loads(line))
 
+    def timeoutConnection(self):
+        "We haven't received data in too long, so drop the connection."
+        self._done = True
+        self.transport.stopProducing()
+        self.deferred.errback(TimeoutError())
+
     def connectionLost(self, reason):
-        "Report back how the connection was lost."
+        "Report back how the connection was lost unless we already did."
+        self.setTimeout(None)
+        if self._done:
+            return
         if reason.check(ResponseDone, PotentialDataLoss):
             self.deferred.callback(None)
         else:
@@ -90,7 +113,8 @@ class Twatter(object):
         `resource` is the part of the resource URL not including the API URL,
         e.g. 'statuses/show.json'. As everything gets decoded by `json.loads`,
         this should always end in '.json'. Any parameters passed in as keyword
-        arguments will be added to the URL as the query string.
+        arguments will be added to the URL as the query string. The `Deferred`
+        returned will fire with the decoded JSON.
         """
         d = self._makeRequest(self.twitterAPI, resource, parameters)
         d.addCallback(theresa.receive, theresa.StringReceiver())
@@ -98,6 +122,13 @@ class Twatter(object):
         return d
 
     def stream(self, resource, delegate, **parameters):
+        """Receive from the twitter 1.1 streaming API.
+
+        `resource` and keyword arguments are treated the same as the in
+        `request`, and `delegate` will be called with each JSON object which is
+        received from the stream. The `Deferred` returned will fire when the
+        stream has ended.
+        """
         d = self._makeRequest(self.streamingAPI, resource, parameters)
         d.addCallback(theresa.receive, TwitterStream(delegate))
         return d
