@@ -4,12 +4,13 @@ from twisted.web.client import Agent, ResponseDone
 from twisted.web.http import PotentialDataLoss
 from twisted.words.protocols import irc
 
-from BeautifulSoup import BeautifulSoup
+from lxml import html
 
 import traceback
 import operator
 import twatter
 import shlex
+import cgi
 import re
 
 # dang why doesn't this exist anywhere already
@@ -57,14 +58,16 @@ def urlInfo(agent, url, redirectFollowCount=3, fullInfo=True):
                 results.append('%d: %s' % (resp.code, url))
                 continue
             elif resp.code == 200:
-                content_type = resp.headers.getRawHeaders('content-type')[0].split(';')[0]
+                content_type, params = cgi.parse_header(resp.headers.getRawHeaders('content-type')[0])
                 result = '%d: %s' % (resp.code, content_type)
                 if content_type == 'text/html':
-                    doc = BeautifulSoup(
-                        (yield receive(resp, StringReceiver())), convertEntities=True)
-                    title_obj = doc.title
-                    if title_obj:
-                        title = ' '.join(title_obj.string.split())
+                    body = yield receive(resp, StringReceiver())
+                    if 'charset' in params:
+                        body = body.decode(params['charset'].strip('"\''), 'replace')
+                    doc = html.fromstring(body)
+                    title_nodes = doc.xpath('//title/text()')
+                    if title_nodes:
+                        title = ' '.join(title_nodes[0].split())
                         if not fullInfo:
                             defer.returnValue('title: %s' % (title,))
                         result = '%s -- %s' % (result, title)
