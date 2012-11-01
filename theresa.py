@@ -19,6 +19,19 @@ import re
 def isWord(word, _pat=re.compile(r"[a-zA-Z']+$")):
     return _pat.match(word) is not None
 
+# dang why doesn't this exist anywhere already
+control_equivalents = {i: unichr(0x2400 + i) for i in xrange(0x20)}
+del control_equivalents[0x02]  # irc bold
+control_equivalents[0x7f] = u'\u2421'
+
+def lowQuote(s):
+    # kind of gross, but this function is called in weird places, so I can't
+    # really do _much_ better for trying to encode on output.
+    if isinstance(s, str):
+        s = s.decode('utf-8')
+    return s.translate(control_equivalents).encode('utf-8')
+irc.lowQuote = lowQuote
+
 twitter_regexp = re.compile(r'twitter\.com/(?:#!/)?[^/]+/status(?:es)?/(\d+)')
 torrent_regexp = re.compile(r'-> (\S+) .*details\.php\?id=(\d+)')
 
@@ -74,9 +87,10 @@ def urlInfo(agent, url, redirectFollowCount=3, fullInfo=True):
                     doc = BeautifulSoup((yield receive(resp, StringReceiver())))
                     title_obj = doc.title
                     if title_obj:
+                        title = ' '.join(title_obj.string.split())
                         if not fullInfo:
-                            defer.returnValue('title: %s' % (title_obj.string,))
-                        result = '%s -- %s' % (result, title_obj.string)
+                            defer.returnValue('title: %s' % (title,))
+                        result = '%s -- %s' % (result, title)
                 results.append(result)
                 break
             else:
@@ -210,6 +224,10 @@ class _IRCBase(irc.IRCClient):
     def noticed(self, user, channel, message):
         pass
 
+    def msg(self, user, message, length=None):
+        # don't want to split messages; just encode the newlines
+        irc.IRCClient.msg(self, user, lowQuote(message), length)
+
 class TheresaProtocol(_IRCBase):
     _buttReady = True
     warnMessage = None
@@ -236,7 +254,7 @@ class TheresaProtocol(_IRCBase):
         @d.addCallback
         def _cb(r):
             if r is not None:
-                self.msg(channel, r.encode('utf-8'))
+                self.msg(channel, r)
         d.addErrback(log.err)
         self._lastURL = url
 
@@ -281,7 +299,7 @@ class TheresaProtocol(_IRCBase):
             for channel in channels:
                 self.msg(
                     channel,
-                    ('\x02<%s>\x02 %s' % (twat.user.screen_name, _extractTwatText(twat))).encode('utf-8'))
+                    ('\x02<%s>\x02 %s' % (twat.user.screen_name, _extractTwatText(twat))))
         return _actualTwatDelegate
 
     def showTwat(self, channel, id):
