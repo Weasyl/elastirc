@@ -1,6 +1,6 @@
 from twisted.application import service
 from twisted.application.internet import TimerService
-from twisted.internet import task, protocol, defer, reactor, error
+from twisted.internet import protocol, defer, reactor, error
 from twisted.python import log
 from twisted.web.client import Agent, ResponseDone
 from twisted.web.http import PotentialDataLoss
@@ -15,9 +15,6 @@ import collections
 import traceback
 import shlex
 import re
-
-def isWord(word, _pat=re.compile(r"[a-zA-Z']+$")):
-    return _pat.match(word) is not None
 
 # dang why doesn't this exist anywhere already
 control_equivalents = {i: unichr(0x2400 + i) for i in xrange(0x20)}
@@ -193,30 +190,6 @@ def _extractTwatText(twat):
         return twat.text
 
 class _IRCBase(irc.IRCClient):
-    outstandingPings = 0
-    _pinger = None
-    nickserv_pw = None
-
-    def _serverPing(self):
-        if self.outstandingPings > 5:
-            self.transport.loseConnection()
-        self.sendLine('PING bollocks')
-        self.outstandingPings += 1
-
-    def irc_PONG(self, prefix, params):
-        self.outstandingPings -= 1
-
-    def signedOn(self):
-        self._pinger = task.LoopingCall(self._serverPing)
-        self._pinger.start(60)
-        if self.nickserv_pw is not None:
-            self.msg('nickserv', 'identify %s' % self.nickserv_pw)
-
-    def connectionLost(self, reason):
-        irc.IRCClient.connectionLost(self, reason)
-        if self._pinger is not None:
-            self._pinger.stop()
-
     def ctcpQuery(self, user, channel, messages):
         messages = [(a.upper(), b) for a, b in messages]
         irc.IRCClient.ctcpQuery(self, user, channel, messages)
@@ -229,7 +202,6 @@ class _IRCBase(irc.IRCClient):
         irc.IRCClient.msg(self, user, lowQuote(message), length)
 
 class TheresaProtocol(_IRCBase):
-    _buttReady = True
     warnMessage = None
     _lastURL = None
     channel = None
