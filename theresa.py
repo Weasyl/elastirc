@@ -12,7 +12,7 @@ import shlex
 import re
 
 # dang why doesn't this exist anywhere already
-control_equivalents = {i: unichr(0x2400 + i) for i in xrange(0x20)}
+control_equivalents = dict((i, unichr(0x2400 + i)) for i in xrange(0x20))
 del control_equivalents[0x02]  # irc bold
 control_equivalents[0x7f] = u'\u2421'
 
@@ -45,7 +45,7 @@ def receive(response, receiver):
     response.deliverBody(receiver)
     return receiver.deferred
 
-redirectsToFollow = {301, 302, 303, 307}
+redirectsToFollow = set((301, 302, 303, 307))
 @defer.inlineCallbacks
 def urlInfo(agent, url, redirectFollowCount=3, fullInfo=True):
     results = [url]
