@@ -38,7 +38,6 @@ class OAuthAgent(object):
                 headers.addRawHeader(header, value)
         parsed = urlparse.urlparse(uri)
         uri = urlparse.urlunparse(parsed._replace(query=urllib.urlencode(parameters)))
-        print `method, uri, headers`
         return self.agent.request(method, uri, headers, bodyProducer)
 
 class Twatter(object):
