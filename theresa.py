@@ -4,10 +4,11 @@ from twisted.web.client import Agent, ResponseDone
 from twisted.web.http import PotentialDataLoss
 from twisted.words.protocols import irc
 
-from twittytwister.twitter import Twitter
 from BeautifulSoup import BeautifulSoup
 
 import traceback
+import operator
+import twatter
 import shlex
 import re
 
@@ -25,7 +26,6 @@ def lowQuote(s):
 irc.lowQuote = lowQuote
 
 twitter_regexp = re.compile(r'twitter\.com/(?:#!/)?[^/]+/status(?:es)?/(\d+)')
-default_twatter = Twitter()
 
 class StringReceiver(protocol.Protocol):
     def __init__(self):
@@ -86,13 +86,6 @@ urlRegex = re.compile(
     u'+(?:\\(([^\\s()<>]+|(\\([^\\s()<>]+\\)))*\\)|[^\\s`!()\\[\\]{};:\'".,<>?'
     u'\xab\xbb\u201c\u201d\u2018\u2019]))'
 )
-
-def _extractTwatText(twat):
-    rt = getattr(twat, 'retweeted_status', None)
-    if rt:
-        return u'RT @%s: %s' % (rt.user.screen_name, rt.text)
-    else:
-        return twat.text
 
 class _IRCBase(irc.IRCClient):
     def ctcpQuery(self, user, channel, messages):
@@ -159,18 +152,22 @@ class TheresaProtocol(_IRCBase):
 
     def _twatDelegate(self, channels):
         def _actualTwatDelegate(twat):
+            message = '\x02<%s>\x02 %s' % (twat['user']['screen_name'], twatter.extractRealTwatText(twat))
             for channel in channels:
-                self.msg(
-                    channel,
-                    ('\x02<%s>\x02 %s' % (twat.user.screen_name, _extractTwatText(twat))))
+                self.msg(channel, message)
         return _actualTwatDelegate
 
     def showTwat(self, channel, id):
-        return self.factory.twatter.show(id, self._twatDelegate([channel]))
+        (self.factory.twatter
+         .request('statuses/show.json', id=id, include_entities='true')
+         .addCallback(self._twatDelegate([channel])))
 
     def command_twat(self, channel, user):
-        return self.factory.twatter.user_timeline(
-            self._twatDelegate([channel]), user, params=dict(count='1', include_rts='true'))
+        return (self.factory.twatter
+                .request('statuses/user_timeline.json',
+                         screen_name=user, count='1', include_rts='true', include_entities='true')
+                .addCallback(operator.itemgetter(0))
+                .addCallback(self._twatDelegate([channel])))
 
     def command_url(self, channel, url=None):
         if url is None:
@@ -180,5 +177,5 @@ class TheresaProtocol(_IRCBase):
 class TheresaFactory(protocol.ReconnectingClientFactory):
     protocol = TheresaProtocol
 
-    def __init__(self, twatter=default_twatter):
+    def __init__(self, twatter):
         self.twatter = twatter

@@ -1,15 +1,23 @@
 # -*- python -*-
 import theresa
+import twatter
+
 from twisted.application import internet, service
+from twisted.web.client import Agent
+from twisted.internet import reactor
+from oauth import oauth
+
+consumer = oauth.OAuthConsumer('...', '...')
+token = oauth.OAuthToken('...', '...')
 
 class Theresa(theresa.TheresaProtocol):
     nickname = 'theresa'
-    nickserv_pw = 'goatse'
     channel = '#theresa-test'
 
 class TheresaFactory(theresa.TheresaFactory):
     protocol = Theresa
 
 application = service.Application("theresa")
-theresaFac = TheresaFactory()
+twatterInstance = twatter.Twatter(twatter.OAuthAgent(Agent(reactor), consumer, token))
+theresaFac = TheresaFactory(twatterInstance)
 internet.TCPClient('irc.esper.net', 5555, theresaFac).setServiceParent(application)
