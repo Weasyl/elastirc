@@ -81,7 +81,8 @@ def urlInfo(agent, url, redirectFollowCount=3, fullInfo=True):
                 content_type = resp.headers.getRawHeaders('content-type')[0].split(';')[0]
                 result = '%d: %s' % (resp.code, content_type)
                 if content_type == 'text/html':
-                    doc = BeautifulSoup((yield receive(resp, StringReceiver())))
+                    doc = BeautifulSoup(
+                        (yield receive(resp, StringReceiver())), convertEntities=True)
                     title_obj = doc.title
                     if title_obj:
                         title = ' '.join(title_obj.string.split())
