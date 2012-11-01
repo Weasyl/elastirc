@@ -6,6 +6,7 @@ from twisted.internet.error import TimeoutError
 from twisted.web.client import ResponseDone
 from twisted.web.http import PotentialDataLoss
 from twisted.internet import defer
+from twisted.python import log
 from oauth import oauth
 
 import urlparse
@@ -77,7 +78,11 @@ class TwitterStream(LineOnlyReceiver, TimeoutMixin):
         "Ignoring empty-line keepalives, inform the delegate about new data."
         if not line:
             return
-        self.delegate(json.loads(line))
+        obj = json.loads(line)
+        try:
+            self.delegate(obj)
+        except:
+            log.err(None, 'error in stream delegate %r' % (self.delegate,))
 
     def timeoutConnection(self):
         "We haven't received data in too long, so drop the connection."
