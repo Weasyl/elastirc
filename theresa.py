@@ -150,7 +150,7 @@ class TheresaProtocol(_IRCBase):
                 return f
             d.addErrback(log.err)
 
-    def _twatDelegate(self, channels):
+    def twatDelegate(self, channels):
         def _actualTwatDelegate(twat):
             message = '\x02<%s>\x02 %s' % (twat['user']['screen_name'], twatter.extractRealTwatText(twat))
             for channel in channels:
@@ -160,14 +160,14 @@ class TheresaProtocol(_IRCBase):
     def showTwat(self, channel, id):
         (self.factory.twatter
          .request('statuses/show.json', id=id, include_entities='true')
-         .addCallback(self._twatDelegate([channel])))
+         .addCallback(self.twatDelegate([channel])))
 
     def command_twat(self, channel, user):
         return (self.factory.twatter
                 .request('statuses/user_timeline.json',
                          screen_name=user, count='1', include_rts='true', include_entities='true')
                 .addCallback(operator.itemgetter(0))
-                .addCallback(self._twatDelegate([channel])))
+                .addCallback(self.twatDelegate([channel])))
 
     def command_url(self, channel, url=None):
         if url is None:

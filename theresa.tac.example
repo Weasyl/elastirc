@@ -5,6 +5,7 @@ import twatter
 from twisted.application import internet, service
 from twisted.web.client import Agent
 from twisted.internet import reactor
+from twisted.python import log
 from oauth import oauth
 
 consumer = oauth.OAuthConsumer('...', '...')
@@ -13,6 +14,15 @@ token = oauth.OAuthToken('...', '...')
 class Theresa(theresa.TheresaProtocol):
     nickname = 'theresa'
     channel = '#theresa-test'
+
+    def streamDelegate(self, data):
+        if 'text' not in data:
+            return
+        self.twatDelegate(self.channels)(data)
+
+    def signedOn(self):
+        theresa.TheresaProtocol.signedOn(self)
+        self.factory.twatter.stream('user.json', self.streamDelegate).addErrback(log.err)
 
 class TheresaFactory(theresa.TheresaFactory):
     protocol = Theresa
