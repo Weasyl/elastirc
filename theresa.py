@@ -111,6 +111,11 @@ class TheresaProtocol(_IRCBase):
     channel = None
     channels = None
 
+    sourceURL = 'https://github.com/habnabit/theresa-bot'
+    versionName = 'theresa'
+    versionNum = 'HEAD'
+    versionEnv = 'twisted'
+
     def __init__(self):
         self.agent = Agent(reactor)
         if self.channels is None:
