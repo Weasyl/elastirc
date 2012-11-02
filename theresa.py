@@ -138,17 +138,16 @@ class TheresaProtocol(_IRCBase):
         if not channel.startswith('#'):
             return
 
-        for m in urlRegex.finditer(message):
-            url = m.group(0)
-            twitter_match = twitter_regexp.search(url)
-            if twitter_match:
-                self.showTwat(channel, twitter_match.group(1))
-            else:
-                if not url.startswith(('http://', 'https://')):
-                    url = 'http://' + url
-                self.showURLInfo(channel, url)
-
         if not message.startswith((',', '!')):
+            for m in urlRegex.finditer(message):
+                url = m.group(0)
+                twitter_match = twitter_regexp.search(url)
+                if twitter_match:
+                    self.showTwat(channel, twitter_match.group(1))
+                else:
+                    if not url.startswith(('http://', 'https://')):
+                        url = 'http://' + url
+                    self.showURLInfo(channel, url)
             return
 
         splut = shlex.split(message[1:])
