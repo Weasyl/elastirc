@@ -1,6 +1,7 @@
+from twisted.internet.error import ConnectionDone
 from twisted.internet import protocol, defer, reactor
 from twisted.python import log
-from twisted.web.client import Agent, ResponseDone
+from twisted.web.client import Agent, ResponseDone, ResponseFailed
 from twisted.web.http import PotentialDataLoss
 from twisted.words.protocols import irc
 
@@ -37,15 +38,22 @@ irc.lowQuote = lowQuote
 twitter_regexp = re.compile(r'twitter\.com/(?:#!/)?[^/]+/status(?:es)?/(\d+)')
 
 class StringReceiver(protocol.Protocol):
-    def __init__(self):
+    def __init__(self, byteLimit=None):
+        self.bytesRemaining = byteLimit
         self.deferred = defer.Deferred()
         self._buffer = []
 
     def dataReceived(self, data):
+        data = data[:self.bytesRemaining]
         self._buffer.append(data)
+        if self.bytesRemaining is not None:
+            self.bytesRemaining -= len(data)
+            if not self.bytesRemaining:
+                self.transport.stopProducing()
 
     def connectionLost(self, reason):
-        if reason.check(ResponseDone, PotentialDataLoss):
+        if ((reason.check(ResponseFailed) and any(exn.check(ConnectionDone) for exn in reason.value.reasons))
+                or reason.check(ResponseDone, PotentialDataLoss)):
             self.deferred.callback(''.join(self._buffer))
         else:
             self.deferred.errback(reason)
@@ -69,7 +77,7 @@ def urlInfo(agent, url, redirectFollowCount=3, fullInfo=True):
                 content_type, params = cgi.parse_header(resp.headers.getRawHeaders('content-type')[0])
                 result = '%d: %s' % (resp.code, content_type)
                 if content_type == 'text/html':
-                    body = yield receive(resp, StringReceiver())
+                    body = yield receive(resp, StringReceiver(4096))
                     if 'charset' in params:
                         body = body.decode(params['charset'].strip('"\''), 'replace')
                     doc = html.fromstring(body)
