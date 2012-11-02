@@ -165,7 +165,7 @@ class TheresaProtocol(_IRCBase):
         def _actualTwatDelegate(twat):
             message = ' '.join([
                     c(' Twitter ', WHITE, CYAN),
-                    b('@s:' % (twat['user']['screen_name'],)),
+                    b('@%s:' % (twat['user']['screen_name'],)),
                     twatter.extractRealTwatText(twat)])
             for channel in channels:
                 self.msg(channel, message)
