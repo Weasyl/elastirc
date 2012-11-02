@@ -15,10 +15,10 @@ import cgi
 import re
 
 # dang why doesn't this exist anywhere already
-control_equivalents = dict((i, unichr(0x2400 + i)) for i in xrange(0x20))
-del control_equivalents[0x02]  # irc bold
-del control_equivalents[0x03]  # irc colours
-control_equivalents[0x7f] = u'\u2421'
+controlEquivalents = dict((i, unichr(0x2400 + i)) for i in xrange(0x20))
+controlEquivalents[0x7f] = u'\u2421'
+def escapeControls(s):
+    return unicode(s).translate(controlEquivalents).encode('utf-8')
 
 def b(text):
     return '\x02%s\x02' % (text,)
@@ -26,14 +26,6 @@ def c(text, *colors):
     return '\x03%s%s\x03' % (','.join(colors), text)
 (WHITE, BLACK, NAVY, GREEN, RED, BROWN, PURPLE, ORANGE, YELLOW, LME, TEAL,
  CYAN, VLUE, PINK, GREY, SILVER) = (str(i) for i in range(16))
-
-def lowQuote(s):
-    # kind of gross, but this function is called in weird places, so I can't
-    # really do _much_ better for trying to encode on output.
-    if isinstance(s, str):
-        s = s.decode('utf-8')
-    return s.translate(control_equivalents).encode('utf-8')
-irc.lowQuote = lowQuote
 
 twitter_regexp = re.compile(r'twitter\.com/(?:#!/)?[^/]+/status(?:es)?/(\d+)')
 
@@ -85,7 +77,7 @@ def urlInfo(agent, url, redirectFollowCount=3, fullInfo=True):
                     if title_nodes:
                         title = ' '.join(title_nodes[0].split())
                         if not fullInfo:
-                            defer.returnValue(c(' Page title ', WHITE, NAVY) + ' ' + b(title))
+                            defer.returnValue(title)
                         result = '%s -- %s' % (result, title)
                 results.append(result)
                 break
@@ -114,10 +106,6 @@ class _IRCBase(irc.IRCClient):
     def noticed(self, user, channel, message):
         pass
 
-    def msg(self, user, message, length=None):
-        # don't want to split messages; just encode the newlines
-        irc.IRCClient.msg(self, user, lowQuote(message), length)
-
 class TheresaProtocol(_IRCBase):
     _lastURL = None
     channel = None
@@ -137,7 +125,7 @@ class TheresaProtocol(_IRCBase):
         @d.addCallback
         def _cb(r):
             if r is not None:
-                self.msg(channel, r)
+                self.msg(channel, c(' Page title ', WHITE, NAVY) + ' ' + b(escapeControls(r)))
         d.addErrback(log.err)
         self._lastURL = url
 
@@ -172,8 +160,8 @@ class TheresaProtocol(_IRCBase):
     def twatDelegate(self, twat, channels):
         message = ' '.join([
                 c(' Twitter ', WHITE, CYAN),
-                b('@%s:' % (twat['user']['screen_name'],)),
-                twatter.extractRealTwatText(twat)])
+                b('@%s:' % (escapeControls(twat['user']['screen_name']),)),
+                escapeControls(twatter.extractRealTwatText(twat))])
         for channel in channels:
             self.msg(channel, message)
 
