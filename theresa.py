@@ -19,6 +19,13 @@ del control_equivalents[0x02]  # irc bold
 del control_equivalents[0x03]  # irc colours
 control_equivalents[0x7f] = u'\u2421'
 
+def b(text):
+    return '\x02%s\x02' % (text,)
+def c(text, *colors):
+    return '\x03%s%s\x03' % (','.join(colors), text)
+(WHITE, BLACK, NAVY, GREEN, RED, BROWN, PURPLE, ORANGE, YELLOW, LME, TEAL,
+ CYAN, VLUE, PINK, GREY, SILVER) = (str(i) for i in range(16))
+
 def lowQuote(s):
     # kind of gross, but this function is called in weird places, so I can't
     # really do _much_ better for trying to encode on output.
@@ -70,7 +77,7 @@ def urlInfo(agent, url, redirectFollowCount=3, fullInfo=True):
                     if title_nodes:
                         title = ' '.join(title_nodes[0].split())
                         if not fullInfo:
-                            defer.returnValue('\x0308,04 Webpage \x03 \x02%s\x02' % (title,))
+                            defer.returnValue(c(' Page title ', WHITE, NAVY) + ' ' + b(title))
                         result = '%s -- %s' % (result, title)
                 results.append(result)
                 break
@@ -150,13 +157,16 @@ class TheresaProtocol(_IRCBase):
             d = defer.maybeDeferred(meth, channel, *params)
             @d.addErrback
             def _eb(f):
-                self.msg(channel, 'error in %s: %s' % (command, f.getErrorMessage()))
+                self.msg(channel, '%s in %s: %s' % (c(' Error ', YELLOW, RED), command, f.getErrorMessage()))
                 return f
             d.addErrback(log.err)
 
     def twatDelegate(self, channels):
         def _actualTwatDelegate(twat):
-            message = '\x0300,10 Twitter \x03 \x02@%s:\x02 %s' % (twat['user']['screen_name'], twatter.extractRealTwatText(twat))
+            message = ' '.join([
+                    c(' Twitter ', WHITE, CYAN),
+                    b('@s:' % (twat['user']['screen_name'],)),
+                    twatter.extractRealTwatText(twat)])
             for channel in channels:
                 self.msg(channel, message)
         return _actualTwatDelegate
