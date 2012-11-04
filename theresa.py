@@ -7,6 +7,7 @@ from twisted.words.protocols import irc
 
 from lxml import html
 
+import collections
 import traceback
 import operator
 import twatter
@@ -105,6 +106,37 @@ class _IRCBase(irc.IRCClient):
 
     def noticed(self, user, channel, message):
         pass
+
+    def signedOn(self):
+        self.channelUsers = collections.defaultdict(set)
+        self.nickPrefixes = ''.join(prefix for prefix, _ in self.supported.getFeature('PREFIX').itervalues())
+
+    def irc_RPL_NAMREPLY(self, prefix, params):
+        channel = params[2].lower()
+        self.channelUsers[channel].update(nick.lstrip(self.nickPrefixes) for nick in params[3].split(' '))
+
+    def userJoined(self, user, channel):
+        nick, _, host = user.partition('!')
+        self.channelUsers[channel.lower()].add(nick)
+
+    def userLeft(self, user, channel):
+        nick, _, host = user.partition('!')
+        self.channelUsers[channel.lower()].discard(nick)
+
+    def userQuit(self, user, quitMessage):
+        nick, _, host = user.partition('!')
+        for users in self.channelUsers.itervalues():
+            users.discard(nick)
+
+    def userKicked(self, kickee, channel, kicker, message):
+        nick, _, host = kickee.partition('!')
+        self.channelUsers[channel.lower()].discard(nick)
+
+    def userRenamed(self, oldname, newname):
+        for users in self.channelUsers.itervalues():
+            if oldname in users:
+                users.discard(oldname)
+                users.add(newname)
 
 class TheresaProtocol(_IRCBase):
     _lastURL = None
