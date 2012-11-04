@@ -3,7 +3,7 @@ import theresa
 import twatter
 
 from twisted.application import internet, service
-from twisted.web.client import Agent
+from twisted.web.client import Agent, HTTPConnectionPool
 from twisted.internet import reactor
 from twisted.python import log
 from oauth import oauth
@@ -31,6 +31,8 @@ class TheresaFactory(theresa.TheresaFactory):
     protocol = Theresa
 
 application = service.Application("theresa")
-twatterInstance = twatter.Twatter(twatter.OAuthAgent(Agent(reactor), consumer, token))
-theresaFac = TheresaFactory(twatterInstance)
+pool = HTTPConnectionPool(reactor)
+agent = Agent(reactor, pool=pool)
+twatterInstance = twatter.Twatter(twatter.OAuthAgent(agent, consumer, token))
+theresaFac = TheresaFactory(agent, twatterInstance)
 internet.TCPClient('irc.esper.net', 5555, theresaFac).setServiceParent(application)

@@ -1,7 +1,7 @@
-from twisted.internet.error import ConnectionDone
+from twisted.internet.error import ConnectionDone, ConnectionLost
 from twisted.internet import protocol, defer, reactor
 from twisted.python import log
-from twisted.web.client import Agent, ResponseDone, ResponseFailed
+from twisted.web.client import ResponseDone, ResponseFailed
 from twisted.web.http import PotentialDataLoss
 from twisted.words.protocols import irc
 
@@ -45,7 +45,8 @@ class StringReceiver(protocol.Protocol):
                 self.transport.stopProducing()
 
     def connectionLost(self, reason):
-        if ((reason.check(ResponseFailed) and any(exn.check(ConnectionDone) for exn in reason.value.reasons))
+        if ((reason.check(ResponseFailed) and any(exn.check(ConnectionDone, ConnectionLost)
+                                                  for exn in reason.value.reasons))
                 or reason.check(ResponseDone, PotentialDataLoss)):
             self.deferred.callback(''.join(self._buffer))
         else:
@@ -149,7 +150,6 @@ class TheresaProtocol(_IRCBase):
     versionEnv = 'twisted'
 
     def __init__(self):
-        self.agent = Agent(reactor)
         if self.channels is None:
             self.channels = self.channel,
 
@@ -158,7 +158,7 @@ class TheresaProtocol(_IRCBase):
         _IRCBase.signedOn(self)
 
     def showURLInfo(self, channel, url, fullInfo=False):
-        d = urlInfo(self.agent, url, fullInfo=fullInfo)
+        d = urlInfo(self.factory.agent, url, fullInfo=fullInfo)
         @d.addCallback
         def _cb(r):
             if r is not None:
@@ -221,5 +221,6 @@ class TheresaProtocol(_IRCBase):
 class TheresaFactory(protocol.ReconnectingClientFactory):
     protocol = TheresaProtocol
 
-    def __init__(self, twatter):
+    def __init__(self, agent, twatter):
+        self.agent = agent
         self.twatter = twatter
