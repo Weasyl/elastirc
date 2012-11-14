@@ -1,5 +1,5 @@
 from twisted.internet.error import ConnectionDone, ConnectionLost
-from twisted.internet import protocol, defer, reactor
+from twisted.internet import protocol, defer
 from twisted.python import log
 from twisted.web.client import ResponseDone, ResponseFailed
 from twisted.web.http import PotentialDataLoss
@@ -157,29 +157,54 @@ class TheresaProtocol(_IRCBase):
         self.join(','.join(self.channels))
         _IRCBase.signedOn(self)
 
-    def showURLInfo(self, channel, url, fullInfo=False):
+    def formatTwat(self, twat):
+        return ' '.join([
+                c(' Twitter ', WHITE, CYAN),
+                b('@%s:' % (escapeControls(twat['user']['screen_name']),)),
+                escapeControls(twatter.extractRealTwatText(twat))])
+
+    def fetchFormattedTwat(self, channel, id):
+        (self.factory.twatter
+         .request('statuses/show.json', id=id, include_entities='true')
+         .addCallback(self.formatTwat)
+         .addCallback(self.messageChannels, [channel]))
+
+    def fetchURLInfo(self, channel, url, fullInfo=False):
         d = urlInfo(self.factory.agent, url, fullInfo=fullInfo)
         @d.addCallback
         def _cb(r):
             if r is not None:
-                self.msg(channel, c(' Page title ', WHITE, NAVY) + ' ' + b(escapeControls(r)))
-        d.addErrback(log.err)
+                return c(' Page title ', WHITE, NAVY) + ' ' + b(escapeControls(r))
         self._lastURL = url
+        return d
+
+    def scanMessage(self, channel, message):
+        scannedDeferreds = []
+        for m in urlRegex.finditer(message):
+            url = m.group(0)
+            twitter_match = twitter_regexp.search(url)
+            if twitter_match:
+                scannedDeferreds.append(self.fetchFormattedTwat(channel, twitter_match.group(1)))
+            else:
+                if not url.startswith(('http://', 'https://')):
+                    url = 'http://' + url
+                scannedDeferreds.append(self.fetchURLInfo(channel, url))
+        if not scannedDeferreds:
+            return
+        d = defer.gatherResults(scannedDeferreds, consumeErrors=True)
+        @d.addCallback
+        def _cb(results):
+            result = u' \xa6 '.encode('utf-8').join(result for result in results if result is not None)
+            if result is not None:
+                self.msg(channel, result)
+        return d
 
     def privmsg(self, user, channel, message):
         if not channel.startswith('#'):
             return
 
         if not message.startswith((',', '!')):
-            for m in urlRegex.finditer(message):
-                url = m.group(0)
-                twitter_match = twitter_regexp.search(url)
-                if twitter_match:
-                    self.showTwat(channel, twitter_match.group(1))
-                else:
-                    if not url.startswith(('http://', 'https://')):
-                        url = 'http://' + url
-                    self.showURLInfo(channel, url)
+            defer.maybeDeferred(self.scanMessage, channel, message).addErrback(log.err)
             return
 
         splut = shlex.split(message[1:])
@@ -193,30 +218,23 @@ class TheresaProtocol(_IRCBase):
                 return f
             d.addErrback(log.err)
 
-    def twatDelegate(self, twat, channels):
-        message = ' '.join([
-                c(' Twitter ', WHITE, CYAN),
-                b('@%s:' % (escapeControls(twat['user']['screen_name']),)),
-                escapeControls(twatter.extractRealTwatText(twat))])
+    def messageChannels(self, message, channels):
         for channel in channels:
             self.msg(channel, message)
-
-    def showTwat(self, channel, id):
-        (self.factory.twatter
-         .request('statuses/show.json', id=id, include_entities='true')
-         .addCallback(self.twatDelegate, [channel]))
 
     def command_twat(self, channel, user):
         return (self.factory.twatter
                 .request('statuses/user_timeline.json',
                          screen_name=user, count='1', include_rts='true', include_entities='true')
                 .addCallback(operator.itemgetter(0))
-                .addCallback(self.twatDelegate, [channel]))
+                .addCallback(self.formatTwat)
+                .addCallback(self.messageChannels, [channel]))
 
     def command_url(self, channel, url=None):
         if url is None:
             url = self._lastURL
-        self.showURLInfo(channel, url, fullInfo=True)
+        return (self.fetchURLInfo(channel, url, fullInfo=True)
+                .addCallback(self.messageChannels, [channel]))
 
 class TheresaFactory(protocol.ReconnectingClientFactory):
     protocol = TheresaProtocol
