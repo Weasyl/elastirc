@@ -163,13 +163,12 @@ class TheresaProtocol(_IRCBase):
                 b('@%s:' % (escapeControls(twat['user']['screen_name']),)),
                 escapeControls(twatter.extractRealTwatText(twat))])
 
-    def fetchFormattedTwat(self, channel, id):
-        (self.factory.twatter
-         .request('statuses/show.json', id=id, include_entities='true')
-         .addCallback(self.formatTwat)
-         .addCallback(self.messageChannels, [channel]))
+    def fetchFormattedTwat(self, id):
+        return (self.factory.twatter
+                .request('statuses/show.json', id=id, include_entities='true')
+                .addCallback(self.formatTwat))
 
-    def fetchURLInfo(self, channel, url, fullInfo=False):
+    def fetchURLInfo(self, url, fullInfo=False):
         d = urlInfo(self.factory.agent, url, fullInfo=fullInfo)
         @d.addCallback
         def _cb(r):
@@ -184,11 +183,11 @@ class TheresaProtocol(_IRCBase):
             url = m.group(0)
             twitter_match = twitter_regexp.search(url)
             if twitter_match:
-                scannedDeferreds.append(self.fetchFormattedTwat(channel, twitter_match.group(1)))
+                scannedDeferreds.append(self.fetchFormattedTwat(twitter_match.group(1)))
             else:
                 if not url.startswith(('http://', 'https://')):
                     url = 'http://' + url
-                scannedDeferreds.append(self.fetchURLInfo(channel, url))
+                scannedDeferreds.append(self.fetchURLInfo(url))
         if not scannedDeferreds:
             return
         d = defer.gatherResults(scannedDeferreds, consumeErrors=True)
@@ -233,7 +232,7 @@ class TheresaProtocol(_IRCBase):
     def command_url(self, channel, url=None):
         if url is None:
             url = self._lastURL
-        return (self.fetchURLInfo(channel, url, fullInfo=True)
+        return (self.fetchURLInfo(url, fullInfo=True)
                 .addCallback(self.messageChannels, [channel]))
 
 class TheresaFactory(protocol.ReconnectingClientFactory):
