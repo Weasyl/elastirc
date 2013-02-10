@@ -3,9 +3,9 @@
 # See COPYING for details.
 
 import elastirc
-from txes.elasticsearch import ElasticSearch
 
 from twisted.application import internet, service
+from twisted.internet import ssl, reactor
 from twisted.python import filepath
 
 class Elastirc(elastirc.ElastircProtocol):
@@ -16,5 +16,12 @@ class ElastircFactory(elastirc.ElastircFactory):
     protocol = Elastirc
 
 application = service.Application("elastirc")
-elastircFac = ElastircFactory(filepath.FilePath('logs'), ElasticSearch())
-internet.TCPClient('irc.esper.net', 5555, elastircFac).setServiceParent(application)
+
+elasticSearch = elastirc.NiceBulkingElasticSearch()
+elasticSearch.failedBulkDataDirectory = 'bulk-failures'
+internet.TimerService(600, elasticSearch.forceBulk).setServiceParent(application)
+reactor.addSystemEventTrigger('before', 'shutdown', elasticSearch.forceBulk, evenOnOneOperation=True)
+
+elastircFac = ElastircFactory(filepath.FilePath('logs'), elasticSearch)
+sslFac = ssl.ClientContextFactory()
+internet.SSLClient('irc.esper.net', 6697, elastircFac, sslFac).setServiceParent(application)

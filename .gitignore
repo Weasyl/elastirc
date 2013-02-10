@@ -1,3 +1,4 @@
 /elastirc.tac
 /logs
+/bulk-failures
 /twistd.*
