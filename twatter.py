@@ -1,3 +1,6 @@
+# Copyright (c) Aaron Gallagher <_@habnab.it>
+# See COPYING for details.
+
 "I HATE TWITTER"
 from twisted.protocols.policies import TimeoutMixin
 from twisted.web.http_headers import Headers
