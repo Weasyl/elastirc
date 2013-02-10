@@ -1,14 +1,16 @@
 # Copyright (c) Aaron Gallagher <_@habnab.it>; Weasyl LLC
 # See COPYING for details.
 
-from twisted.internet import protocol
+from twisted.internet import protocol, defer
 from twisted.python.logfile import DailyLogFile
 from twisted.python import log
 from twisted.words.protocols import irc
+from txes.elasticsearch import ElasticSearch
 
 import collections
 import datetime
 import re
+import tempfile
 
 
 ircFormattingCruftRegexp = re.compile('\x03[0-9]{1,2}(?:,[0-9]{1,2})?|[\x00-\x08\x0A-\x1F]')
@@ -17,6 +19,28 @@ def fixupMessage(message):
 
 DATE_FORMAT = '%F'
 TIME_FORMAT = '%T'
+
+
+class NiceBulkingElasticSearch(ElasticSearch):
+    failedBulkDataDirectory = None
+
+    def _logFailedBulkData(self, reason, data):
+        now = datetime.datetime.now()
+        with tempfile.NamedTemporaryFile(prefix=now.isoformat() + '_',
+                                         dir=self.failedBulkDataDirectory,
+                                         delete=False) as outfile:
+            outfile.write('\n'.join(data))
+        log.err(reason, 'failed to submit bulk data; request saved to %s' % (outfile.name,))
+
+    def forceBulk(self):
+        if len(self.bulkData) <= 1:
+            return defer.succeed(None)
+
+        oldBulkData = self.bulkData
+        d = super(NiceBulkingElasticSearch, self).forceBulk()
+        if self.failedBulkDataDirectory is not None:
+            d.addErrback(self._logFailedBulkData, oldBulkData)
+        return d
 
 
 class ElastircLogFile(DailyLogFile):
