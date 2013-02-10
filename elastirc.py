@@ -2,10 +2,15 @@
 # See COPYING for details.
 
 from twisted.internet import protocol, defer
+from twisted.python.filepath import FilePath
 from twisted.python.logfile import DailyLogFile
 from twisted.python import log
+from twisted.web.resource import Resource
+from twisted.web import template
 from twisted.words.protocols import irc
 from txes.elasticsearch import ElasticSearch
+
+from dateutil.parser import parse as parseTimestamp
 
 import collections
 import datetime
@@ -93,9 +98,6 @@ class _IRCBase(irc.IRCClient):
 
 
 class ElastircProtocol(_IRCBase):
-    channel = None
-    channels = None
-
     sourceURL = 'https://github.com/Weasyl/elastirc'
     versionName = 'elastirc'
     versionNum = 'HEAD'
@@ -103,12 +105,8 @@ class ElastircProtocol(_IRCBase):
 
     logFactory = ElastircLogFile
 
-    def __init__(self):
-        if self.channels is None:
-            self.channels = self.channel,
-
     def signedOn(self):
-        self.join(','.join(self.channels))
+        self.join(','.join(self.factory.channels))
         self.logfiles = {}
         _IRCBase.signedOn(self)
 
@@ -122,7 +120,7 @@ class ElastircProtocol(_IRCBase):
         return ret
 
     def logDocument(self, channel, **document):
-        if channel not in self.channels:
+        if channel not in self.factory.channels:
             return
         channel = channel.lstrip('#&')
         now = datetime.datetime.now()
@@ -197,7 +195,72 @@ class ElastircProtocol(_IRCBase):
 
 class ElastircFactory(protocol.ReconnectingClientFactory):
     protocol = ElastircProtocol
+    channel = None
+    channels = None
+
 
     def __init__(self, logDir, elasticSearch):
         self.logDir = logDir
         self.elasticSearch = elasticSearch
+        if self.channels is None:
+            self.channels = self.channel,
+
+    def buildWebResource(self):
+        root = Resource()
+        root.putChild('', ElastircSearchResource(self))
+        return root
+
+
+class ElastircSearchTemplate(template.Element):
+    loader = template.XMLFile(FilePath('templates/search.xhtml'))
+
+    def __init__(self, channelNames):
+        template.Element.__init__(self)
+        self.channelNames = channelNames
+
+    @template.renderer
+    def channels(self, request, tag):
+        for channel in self.channelNames:
+            yield tag.clone().fillSlots(channel=channel, indexName=channel.lstrip('#&'))
+
+
+class ElastircSearchResultsTemplate(template.Element):
+    loader = template.XMLFile(FilePath('templates/search-results.xhtml'))
+
+    def __init__(self, resultsDeferred):
+        template.Element.__init__(self)
+        self.resultsDeferred = resultsDeferred
+
+    @template.renderer
+    @defer.inlineCallbacks
+    def results(self, request, tag):
+        results = yield self.resultsDeferred
+        ret = []
+        for result in results['hits']['hits']:
+            timestamp = parseTimestamp(result['_source']['receivedAt'])
+            ret.append(tag.clone().fillSlots(timestamp=timestamp.strftime(TIME_FORMAT), **result['_source']))
+        defer.returnValue(ret)
+
+
+class ElastircSearchResource(Resource):
+    def __init__(self, elastircFactory):
+        self.elastircFactory = elastircFactory
+        self.template_GET = ElastircSearchTemplate(self.elastircFactory.channels)
+
+    def render_GET(self, request):
+        return template.renderElement(request, self.template_GET)
+
+    def render_POST(self, request):
+        indexes = None
+        if 'index' in request.args:
+            indexes = [index + '*' for index in request.args.pop('index')]
+
+        queryArgs = dict((k, v[0]) for k, v in request.args.iteritems() if k in ('actor', 'formatted') and any(v))
+        if not queryArgs:
+            return self.render_GET(request)
+        query = {'query': {'term': queryArgs}}
+
+        return template.renderElement(
+            request,
+            ElastircSearchResultsTemplate(
+                self.elastircFactory.elasticSearch.search(query, indexes=indexes, docType='irc')))

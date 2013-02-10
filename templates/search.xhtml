@@ -1,0 +1,22 @@
+<html xmlns:t="http://twistedmatrix.com/ns/twisted.web.template/0.1">
+<body>
+  <h2>Search some IRC logs!</h2>
+  <form action="" method="POST">
+    <fieldset>
+      <label for="actor">Nickname</label>
+      <input type="text" name="actor" />
+      <label for="formatted">Message</label>
+      <input type="text" name="formatted" />
+      <t:transparent t:render="channels">
+        <label>
+          <input type="checkbox" name="index">
+            <t:attr name="value"><t:slot name="indexName" /></t:attr>
+          </input>
+          <t:slot name="channel" />
+        </label>
+      </t:transparent>
+      <input type="submit" name="submit" value="Search" />
+    </fieldset>
+  </form>
+</body>
+</html>
