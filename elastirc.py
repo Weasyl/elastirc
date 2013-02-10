@@ -3,10 +3,10 @@
 
 from twisted.internet import protocol, defer
 from twisted.python.filepath import FilePath
-from twisted.python.logfile import DailyLogFile
+from twisted.python.logfile import BaseLogFile
 from twisted.python import log
 from twisted.web.resource import Resource
-from twisted.web import template
+from twisted.web import template, static
 from twisted.words.protocols import irc
 from txes.elasticsearch import ElasticSearch
 
@@ -14,6 +14,7 @@ from dateutil.parser import parse as parseTimestamp
 
 import collections
 import datetime
+import os.path
 import re
 import tempfile
 
@@ -48,13 +49,32 @@ class NiceBulkingElasticSearch(ElasticSearch):
         return d
 
 
-class ElastircLogFile(DailyLogFile):
-    def suffix(self, unixtime_or_tupledate):
-        try:
-            dt = datetime.datetime.fromtimestamp(unixtime_or_tupledate)
-        except TypeError:
-            dt = datetime.datetime(*unixtime_or_tupledate)
-        return dt.strftime(DATE_FORMAT)
+class DatestampedLogFile(BaseLogFile, object):
+    datestampFormat = DATE_FORMAT
+
+    def __init__(self, name, directory, defaultMode=None):
+        self.basePath = os.path.join(directory, name)
+        BaseLogFile.__init__(self, name, directory, defaultMode)
+        self.lastPath = self.path
+
+    def _getPath(self):
+        return '%s.%s' % (self.basePath, self.suffix())
+
+    def _setPath(self, ignored):
+        pass
+
+    path = property(_getPath, _setPath)
+
+    def shouldRotate(self):
+        return self.path != self.lastPath
+
+    def rotate(self):
+        self.reopen()
+
+    def suffix(self, when=None):
+        if when is None:
+            when = datetime.datetime.now()
+        return when.strftime(self.datestampFormat)
 
 
 class _IRCBase(irc.IRCClient):
@@ -103,33 +123,12 @@ class ElastircProtocol(_IRCBase):
     versionNum = 'HEAD'
     versionEnv = 'twisted'
 
-    logFactory = ElastircLogFile
-
     def signedOn(self):
         self.join(','.join(self.factory.channels))
-        self.logfiles = {}
         _IRCBase.signedOn(self)
 
-    def _getLogFile(self, channel):
-        ret = self.logfiles.get(channel)
-        if not ret:
-            thisLogDir = self.factory.logDir.child(channel)
-            if not thisLogDir.exists():
-                thisLogDir.makedirs()
-            ret = self.logfiles[channel] = self.logFactory(channel, thisLogDir.path)
-        return ret
-
     def logDocument(self, channel, **document):
-        if channel not in self.factory.channels:
-            return
-        channel = channel.lstrip('#&')
-        now = datetime.datetime.now()
-        document['receivedAt'] = now.isoformat()
-        self._getLogFile(channel).write(
-            '%s %s\n' % (now.strftime(TIME_FORMAT), document['formatted'].encode('utf-8')))
-        d = self.factory.elasticSearch.index(
-            document, '%s.%s' % (channel, now.strftime(DATE_FORMAT)), 'irc', bulk=True)
-        d.addErrback(log.err, 'error indexing')
+        self.factory.logDocument(channel, document)
 
     def privmsg(self, user, channel, message):
         nick = user.partition('!')[0]
@@ -195,6 +194,8 @@ class ElastircProtocol(_IRCBase):
 
 class ElastircFactory(protocol.ReconnectingClientFactory):
     protocol = ElastircProtocol
+    logFactory = DatestampedLogFile
+
     channel = None
     channels = None
 
@@ -202,12 +203,36 @@ class ElastircFactory(protocol.ReconnectingClientFactory):
     def __init__(self, logDir, elasticSearch):
         self.logDir = logDir
         self.elasticSearch = elasticSearch
+        self.logfiles = {}
         if self.channels is None:
             self.channels = self.channel,
+
+    def getLogFile(self, channel):
+        channel = channel.lstrip('#&')
+        ret = self.logfiles.get(channel)
+        if not ret:
+            thisLogDir = self.logDir.child(channel)
+            if not thisLogDir.exists():
+                thisLogDir.makedirs()
+            ret = self.logfiles[channel] = self.logFactory(channel, thisLogDir.path)
+        return ret
+
+    def logDocument(self, channel, document):
+        if channel not in self.channels:
+            return
+        channel = channel.lstrip('#&')
+        now = datetime.datetime.now()
+        document['receivedAt'] = now.isoformat()
+        self.getLogFile(channel).write(
+            '%s %s\n' % (now.strftime(TIME_FORMAT), document['formatted'].encode('utf-8')))
+        d = self.elasticSearch.index(
+            document, '%s.%s' % (channel, now.strftime(DATE_FORMAT)), 'irc', bulk=True)
+        d.addErrback(log.err, 'error indexing')
 
     def buildWebResource(self):
         root = Resource()
         root.putChild('', ElastircSearchResource(self))
+        root.putChild('logs', static.File(self.logDir.path, defaultType='text/plain'))
         return root
 
 
