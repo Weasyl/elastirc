@@ -32,8 +32,8 @@ class NiceBulkingElasticSearch(ElasticSearch):
             outfile.write('\n'.join(data))
         log.err(reason, 'failed to submit bulk data; request saved to %s' % (outfile.name,))
 
-    def forceBulk(self):
-        if len(self.bulkData) <= 1:
+    def forceBulk(self, evenOnOneOperation=False):
+        if len(self.bulkData) <= 1 and not evenOnOneOperation:
             return defer.succeed(None)
 
         oldBulkData = self.bulkData
