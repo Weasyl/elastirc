@@ -3,22 +3,30 @@
 
 from twisted.internet import protocol
 from twisted.python.logfile import DailyLogFile
+from twisted.python import log
 from twisted.words.protocols import irc
 
 import collections
 import datetime
 import re
 
-ircFormattingCruft = re.compile('\x03[0-9]{1,2}(?:,[0-9]{1,2})?|[\x00-\x08\x0A-\x1F]')
-def stripFormattingCruft(s):
-    return ircFormattingCruft.sub('', s)
+
+ircFormattingCruftRegexp = re.compile('\x03[0-9]{1,2}(?:,[0-9]{1,2})?|[\x00-\x08\x0A-\x1F]')
+def fixupMessage(message):
+    return ircFormattingCruftRegexp.sub('', message).decode('utf-8', 'replace')
+
+DATE_FORMAT = '%F'
+TIME_FORMAT = '%T'
+
 
 class ElastircLogFile(DailyLogFile):
-    timestampFormat = '%T'
+    def suffix(self, unixtime_or_tupledate):
+        try:
+            dt = datetime.datetime.fromtimestamp(unixtime_or_tupledate)
+        except TypeError:
+            dt = datetime.datetime(*unixtime_or_tupledate)
+        return dt.strftime(DATE_FORMAT)
 
-    def writeTimestampedLine(self, data):
-        now = datetime.datetime.now()
-        self.write('%s %s\n' % (now.strftime(self.timestampFormat), data))
 
 class _IRCBase(irc.IRCClient):
     def ctcpQuery(self, user, channel, messages):
@@ -59,6 +67,7 @@ class _IRCBase(irc.IRCClient):
                 users.discard(oldname)
                 users.add(newname)
 
+
 class ElastircProtocol(_IRCBase):
     channel = None
     channels = None
@@ -79,8 +88,7 @@ class ElastircProtocol(_IRCBase):
         self.logfiles = {}
         _IRCBase.signedOn(self)
 
-    def getLogFile(self, channel):
-        channel = channel.lstrip('#&')
+    def _getLogFile(self, channel):
         ret = self.logfiles.get(channel)
         if not ret:
             thisLogDir = self.factory.logDir.child(channel)
@@ -89,54 +97,83 @@ class ElastircProtocol(_IRCBase):
             ret = self.logfiles[channel] = self.logFactory(channel, thisLogDir.path)
         return ret
 
-    def logLine(self, channel, message):
+    def logDocument(self, channel, **document):
         if channel not in self.channels:
             return
-        self.getLogFile(channel).writeTimestampedLine(stripFormattingCruft(message))
+        channel = channel.lstrip('#&')
+        now = datetime.datetime.now()
+        document['receivedAt'] = now.isoformat()
+        self._getLogFile(channel).write(
+            '%s %s\n' % (now.strftime(TIME_FORMAT), document['formatted'].encode('utf-8')))
+        d = self.factory.elasticSearch.index(
+            document, '%s.%s' % (channel, now.strftime(DATE_FORMAT)), 'irc', bulk=True)
+        d.addErrback(log.err, 'error indexing')
 
     def privmsg(self, user, channel, message):
         nick = user.partition('!')[0]
-        self.logLine(channel, '<%s> %s' % (nick, message))
+        message = fixupMessage(message)
+        self.logDocument(channel, actor=nick, message=message, formatted='<%s> %s' % (nick, message))
 
     def action(self, user, channel, message):
         nick = user.partition('!')[0]
-        self.logLine(channel, '* %s %s' % (nick, message))
+        message = fixupMessage(message)
+        self.logDocument(channel, actor=nick, message=message, formatted='* %s %s' % (nick, message))
 
     def userJoined(self, user, channel):
         nick = user.partition('!')[0]
-        self.logLine(channel, '(-) %s joined' % (nick,))
+        self.logDocument(channel, actor=nick, formatted='(-) %s joined' % (nick,))
         _IRCBase.userJoined(self, user, channel)
 
     def userLeft(self, user, channel):
         nick = user.partition('!')[0]
-        self.logLine(channel, '(-) %s parted' % (nick,))
+        self.logDocument(channel, actor=nick, formatted='(-) %s parted' % (nick,))
         _IRCBase.userLeft(self, user, channel)
 
     def userQuit(self, user, quitMessage):
         nick = user.partition('!')[0]
+        quitMessage = fixupMessage(quitMessage)
         for channel, users in self.channelUsers.iteritems():
             if nick in users:
-                self.logLine(channel, '(-) %s quit (%s)' % (nick, quitMessage))
+                self.logDocument(
+                    channel, actor=nick, reason=quitMessage,
+                    formatted='(-) %s quit (%s)' % (nick, quitMessage))
         _IRCBase.userQuit(self, user, quitMessage)
 
     def userKicked(self, kickee, channel, kicker, message):
         kickeeNick = kickee.partition('!')[0]
         kickerNick = kicker.partition('!')[0]
-        self.logLine(channel, '(-) %s was kicked by %s (%s)' % (kickeeNick, kickerNick, message))
+        message = fixupMessage(message)
+        self.logDocument(
+            channel, actor=kickeeNick, kicker=kickerNick, reason=message,
+            formatted='(-) %s was kicked by %s (%s)' % (kickeeNick, kickerNick, message))
         _IRCBase.userKicked(self, kickee, channel, kicker, message)
 
     def userRenamed(self, oldname, newname):
         for channel, users in self.channelUsers.iteritems():
             if oldname in users:
-                self.logLine(channel, '(-) %s changed nick from %s' % (newname, oldname))
+                self.logDocument(
+                    channel, actor=newname, oldName=oldname,
+                    formatted='(-) %s changed nick from %s' % (newname, oldname))
         _IRCBase.userRenamed(self, oldname, newname)
 
     def topicUpdated(self, user, channel, newTopic):
         nick = user.partition('!')[0]
-        self.logLine(channel, '(-) %s changed topic to %s' % (nick, newTopic))
+        newTopic = fixupMessage(newTopic)
+        self.logDocument(
+            channel, actor=nick, topic=newTopic,
+            formatted='(-) %s changed topic to %s' % (nick, newTopic))
+
+    def modeChanged(self, user, channel, polarity, modes, args):
+        nick = user.partition('!')[0]
+        self.logDocument(
+            channel, actor=nick,
+            formatted='(-) %s set mode %s%s %s' % (
+                nick, '+' if polarity else '-', modes, ' '.join(arg for arg in args if arg)))
+
 
 class ElastircFactory(protocol.ReconnectingClientFactory):
     protocol = ElastircProtocol
 
-    def __init__(self, logDir):
+    def __init__(self, logDir, elasticSearch):
         self.logDir = logDir
+        self.elasticSearch = elasticSearch
