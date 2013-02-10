@@ -1,4 +1,4 @@
-# Copyright (c) Aaron Gallagher <_@habnab.it>
+# Copyright (c) Aaron Gallagher <_@habnab.it>; Weasyl LLC
 # See COPYING for details.
 
 from twisted.internet.error import ConnectionDone, ConnectionLost
