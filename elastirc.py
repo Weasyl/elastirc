@@ -1,6 +1,8 @@
 # Copyright (c) Aaron Gallagher <_@habnab.it>; Weasyl LLC
 # See COPYING for details.
 
+from __future__ import division
+
 from twisted.internet import protocol, defer
 from twisted.python.filepath import FilePath
 from twisted.python.logfile import BaseLogFile
@@ -249,6 +251,31 @@ class ElastircSearchTemplate(template.Element):
             yield tag.clone().fillSlots(channel=channel, indexName=channel.lstrip('#&'))
 
 
+class ElastircSearchResultFileTemplate(template.Element):
+    loader = template.XMLFile(FilePath('templates/search-result-file.xhtml'))
+
+    def __init__(self, index, hits):
+        template.Element.__init__(self)
+        self.index = index
+        self.hits = hits
+        self.channel = self.index.rsplit('.', 1)[0]
+
+    @template.renderer
+    def content(self, request, tag):
+        return tag.fillSlots(
+            index=self.index,
+            channel=self.channel,
+            logPath='/logs/%s/%s' % (self.channel, self.index))
+
+    @template.renderer
+    def logLines(self, request, tag):
+        for result in self.hits:
+            timestamp = parseTimestamp(result['_source']['receivedAt'])
+            yield tag.clone().fillSlots(
+                timestamp=timestamp.strftime(TIME_FORMAT),
+                **result['_source'])
+
+
 class ElastircSearchResultsTemplate(template.Element):
     loader = template.XMLFile(FilePath('templates/search-results.xhtml'))
 
@@ -260,10 +287,14 @@ class ElastircSearchResultsTemplate(template.Element):
     @defer.inlineCallbacks
     def results(self, request, tag):
         results = yield self.resultsDeferred
-        ret = []
+        resultsByIndex = collections.defaultdict(list)
         for result in results['hits']['hits']:
-            timestamp = parseTimestamp(result['_source']['receivedAt'])
-            ret.append(tag.clone().fillSlots(timestamp=timestamp.strftime(TIME_FORMAT), **result['_source']))
+            resultsByIndex[result['_index']].append(result)
+
+        ret = []
+        for index, hits in resultsByIndex.iteritems():
+            ret.append(ElastircSearchResultFileTemplate(index, hits))
+        ret.append(tag.fillSlots(took='%0.3g' % (results['took'] / 1000,)))
         defer.returnValue(ret)
 
 
@@ -273,6 +304,7 @@ class ElastircSearchResource(Resource):
         self.template_GET = ElastircSearchTemplate(self.elastircFactory.channels)
 
     def render_GET(self, request):
+        request.setHeader('content-type', 'text/html; charset=utf8')
         return template.renderElement(request, self.template_GET)
 
     def render_POST(self, request):
@@ -283,8 +315,12 @@ class ElastircSearchResource(Resource):
         queryArgs = dict((k, v[0]) for k, v in request.args.iteritems() if k in ('actor', 'formatted') and any(v))
         if not queryArgs:
             return self.render_GET(request)
-        query = {'query': {'term': queryArgs}}
+        query = {
+            'query': {'wildcard': queryArgs},
+            'sort': [{'receivedAt': 'desc'}],
+        }
 
+        request.setHeader('content-type', 'text/html; charset=utf-8')
         return template.renderElement(
             request,
             ElastircSearchResultsTemplate(

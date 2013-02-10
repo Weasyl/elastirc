@@ -1,0 +1,9 @@
+<t:transparent t:render="content" xmlns:t="http://twistedmatrix.com/ns/twisted.web.template/0.1">
+  <h3>
+    <a>
+      <t:attr name="href"><t:slot name="logPath" /></t:attr>
+      <t:slot name="index" />
+    </a>
+  </h3>
+  <p class="log-line" t:render="logLines"><t:slot name="timestamp" /> <t:slot name="formatted" /></p>
+</t:transparent>

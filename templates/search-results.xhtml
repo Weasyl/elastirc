@@ -1,7 +1,12 @@
 <html xmlns:t="http://twistedmatrix.com/ns/twisted.web.template/0.1">
+<head>
+  <style type="text/css">
+    p.log-line { white-space: pre-wrap; font-family: monospace; }
+  </style>
+</head>
 <body>
-  <p t:render="results">
-    <span class="timestamp"><t:slot name="timestamp" /></span> <t:slot name="formatted" />
-  </p>
+  <t:transparent t:render="results">
+    <p>Searched in <t:slot name="took" />s.</p>
+  </t:transparent>
 </body>
 </html>
