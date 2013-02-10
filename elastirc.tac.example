@@ -1,0 +1,19 @@
+# -*- python -*-
+# Copyright (c) Aaron Gallagher <_@habnab.it>; Weasyl LLC
+# See COPYING for details.
+
+import elastirc
+
+from twisted.application import internet, service
+from twisted.python import filepath
+
+class Elastirc(elastirc.ElastircProtocol):
+    nickname = 'elastirc'
+    channel = '#elastirc-test'
+
+class ElastircFactory(elastirc.ElastircFactory):
+    protocol = Elastirc
+
+application = service.Application("elastirc")
+elastircFac = ElastircFactory(filepath.FilePath('logs'))
+internet.TCPClient('irc.esper.net', 5555, elastircFac).setServiceParent(application)
