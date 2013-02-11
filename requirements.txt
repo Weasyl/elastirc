@@ -1,1 +1,3 @@
-Twisted
+python-dateutil
+Twisted>=12.1
+txes
