@@ -234,7 +234,7 @@ class ElastircFactory(protocol.ReconnectingClientFactory):
     def buildWebResource(self):
         root = Resource()
         root.putChild('', ElastircSearchResource(self))
-        root.putChild('logs', static.File(self.logDir.path, defaultType='text/plain'))
+        root.putChild('logs', static.File(self.logDir.path, defaultType='text/plain; charset=utf-8'))
         return root
 
 
