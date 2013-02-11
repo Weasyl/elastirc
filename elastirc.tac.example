@@ -21,7 +21,7 @@ application = service.Application("elastirc")
 elasticSearch = elastirc.NiceBulkingElasticSearch()
 elasticSearch.failedBulkDataDirectory = 'bulk-failures'
 internet.TimerService(600, elasticSearch.forceBulk).setServiceParent(application)
-reactor.addSystemEventTrigger('before', 'shutdown', elasticSearch.forceBulk, evenOnOneOperation=True)
+reactor.addSystemEventTrigger('before', 'shutdown', elasticSearch.forceBulk)
 
 elastircFac = ElastircFactory(filepath.FilePath('logs'), elasticSearch)
 site = Site(elastircFac.buildWebResource())
