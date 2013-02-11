@@ -7,13 +7,14 @@ import elastirc
 from twisted.application import internet, service
 from twisted.internet import ssl, reactor
 from twisted.python import filepath
+from twisted.web.server import Site
 
 class Elastirc(elastirc.ElastircProtocol):
     nickname = 'elastirc'
-    channel = '#elastirc-test'
 
 class ElastircFactory(elastirc.ElastircFactory):
     protocol = Elastirc
+    channel = '#elastirc-test'
 
 application = service.Application("elastirc")
 
@@ -23,5 +24,7 @@ internet.TimerService(600, elasticSearch.forceBulk).setServiceParent(application
 reactor.addSystemEventTrigger('before', 'shutdown', elasticSearch.forceBulk, evenOnOneOperation=True)
 
 elastircFac = ElastircFactory(filepath.FilePath('logs'), elasticSearch)
+site = Site(elastircFac.buildWebResource())
 sslFac = ssl.ClientContextFactory()
 internet.SSLClient('irc.esper.net', 6697, elastircFac, sslFac).setServiceParent(application)
+internet.TCPServer(8088, site).setServiceParent(application)
