@@ -30,9 +30,18 @@ TIME_FORMAT = '%T'
 
 
 class NiceBulkingElasticSearch(ElasticSearch):
+    """An ElasticSearch interface which is kinder about bulk updates.
+
+    The ElasticSearch interface in txes can lose data in failure cases because
+    the bulk data isn't saved on errback. This subclass will instead save the
+    requests so they can be retried later. To enable request saving, set the
+    `failedBulkDataDirectory` attribute to some path.
+    """
+
     failedBulkDataDirectory = None
 
     def _logFailedBulkData(self, reason, data):
+        "Write out a bulk data request to a file and log the error."
         now = datetime.datetime.now()
         with tempfile.NamedTemporaryFile(prefix=now.isoformat() + '_',
                                          dir=self.failedBulkDataDirectory,
@@ -41,6 +50,13 @@ class NiceBulkingElasticSearch(ElasticSearch):
         log.err(reason, 'failed to submit bulk data; request saved to %s' % (outfile.name,))
 
     def forceBulk(self):
+        """Submit a bulk data request, potentially logging the data.
+
+        If the `failedBulkDataDirectory` attribute is set when this method is
+        called, an errback will be added that will save the request data, log
+        the error, and then pass along None.
+        """
+
         oldBulkData = self.bulkData
         d = super(NiceBulkingElasticSearch, self).forceBulk()
         if self.failedBulkDataDirectory is not None:
@@ -49,6 +65,12 @@ class NiceBulkingElasticSearch(ElasticSearch):
 
 
 class DatestampedLogFile(BaseLogFile, object):
+    """A LogFile which always logs to files suffixed with the current date.
+
+    The date format used as a suffix is controlled by the `datestampFormat`
+    attribute.
+    """
+
     datestampFormat = DATE_FORMAT
 
     def __init__(self, name, directory, defaultMode=None):
@@ -57,20 +79,38 @@ class DatestampedLogFile(BaseLogFile, object):
         self.lastPath = self.path
 
     def _getPath(self):
+        "The logfile path will always be the base path with a dated suffix."
         return '%s.%s' % (self.basePath, self.suffix())
 
     def _setPath(self, ignored):
+        "Assignment to the `path` attribute is ignored."
         pass
 
     path = property(_getPath, _setPath)
 
     def shouldRotate(self):
+        """Returns True if the log should be rotated.
+
+        Logs are only rotated when the current date is different from the date
+        of the last log message.
+        """
+
         return self.path != self.lastPath
 
     def rotate(self):
+        "Rotate the log files."
+
+        # Since logs aren't _actually_ rotated (since they're created with the
+        # name they'll always have), just close the old log file and open the
+        # new one.
         self.reopen()
 
     def suffix(self, when=None):
+        """Determine the suffix for log files, optionally for a given datetime.
+
+        By default, this is derived from the `datestampFormat` attribute.
+        """
+
         if when is None:
             when = datetime.datetime.now()
         return when.strftime(self.datestampFormat)
@@ -198,7 +238,6 @@ class ElastircFactory(protocol.ReconnectingClientFactory):
     channel = None
     channels = None
 
-
     def __init__(self, logDir, elasticSearch):
         self.logDir = logDir
         self.elasticSearch = elasticSearch
@@ -207,6 +246,12 @@ class ElastircFactory(protocol.ReconnectingClientFactory):
             self.channels = self.channel,
 
     def getLogFile(self, channel):
+        """Return the LogFile for the given channel.
+
+        If there's no current log file for the channel, make one using the
+        `logFactory` attribute first.
+        """
+
         channel = channel.lstrip('#&')
         ret = self.logfiles.get(channel)
         if not ret:
@@ -217,6 +262,15 @@ class ElastircFactory(protocol.ReconnectingClientFactory):
         return ret
 
     def logDocument(self, channel, document):
+        """Log a document from a particular channel.
+
+        This will immediately write out the plaintext log to disk and queue up
+        the ElasticSearch item for inserting. The document can contain as many
+        keys as are relevant, but must at least contain a unicode string under
+        the key `formatted`, which will be written out to the log file and
+        displayed in search results.
+        """
+
         if channel not in self.channels:
             return
         channel = channel.lstrip('#&')
@@ -229,6 +283,12 @@ class ElastircFactory(protocol.ReconnectingClientFactory):
         d.addErrback(log.err, 'error indexing')
 
     def buildWebResource(self):
+        """Make a Resource that exposes logs and log search.
+
+        The plaintext logs are available under `/logs` and the search is
+        available at `/`.
+        """
+
         root = Resource()
         root.putChild('', ElastircSearchResource(self))
         root.putChild('logs', static.File(self.logDir.path, defaultType='text/plain; charset=utf-8'))
@@ -236,6 +296,8 @@ class ElastircFactory(protocol.ReconnectingClientFactory):
 
 
 class ElastircSearchTemplate(template.Element):
+    "A template for the search form."
+
     loader = template.XMLFile(FilePath('templates/search.xhtml'))
 
     def __init__(self, channelNames):
@@ -244,11 +306,14 @@ class ElastircSearchTemplate(template.Element):
 
     @template.renderer
     def channels(self, request, tag):
+        "Drop in each searchable channel."
         for channel in self.channelNames:
             yield tag.clone().fillSlots(channel=channel, indexName=channel.lstrip('#&'))
 
 
 class ElastircSearchResultFileTemplate(template.Element):
+    "A template for displaying the all the matches for a particular log file."
+
     loader = template.XMLFile(FilePath('templates/search-result-file.xhtml'))
 
     def __init__(self, index, hits):
@@ -259,6 +324,7 @@ class ElastircSearchResultFileTemplate(template.Element):
 
     @template.renderer
     def content(self, request, tag):
+        "Drop in information about the log file."
         return tag.fillSlots(
             index=self.index,
             channel=self.channel,
@@ -266,6 +332,7 @@ class ElastircSearchResultFileTemplate(template.Element):
 
     @template.renderer
     def logLines(self, request, tag):
+        "Drop in each matched line from the log file."
         for result in self.hits:
             timestamp = parseTimestamp(result['_source']['receivedAt'])
             yield tag.clone().fillSlots(
@@ -274,6 +341,8 @@ class ElastircSearchResultFileTemplate(template.Element):
 
 
 class ElastircSearchResultsTemplate(template.Element):
+    "A template for the search results page."
+
     loader = template.XMLFile(FilePath('templates/search-results.xhtml'))
 
     def __init__(self, resultsDeferred):
@@ -283,6 +352,7 @@ class ElastircSearchResultsTemplate(template.Element):
     @template.renderer
     @defer.inlineCallbacks
     def results(self, request, tag):
+        "Drop in the results of the search after the results deferred fires."
         results = yield self.resultsDeferred
         resultsByIndex = collections.defaultdict(list)
         for result in results['hits']['hits']:
@@ -296,15 +366,19 @@ class ElastircSearchResultsTemplate(template.Element):
 
 
 class ElastircSearchResource(Resource):
+    "A Resource for searching the ElasticSearch backend."
+
     def __init__(self, elastircFactory):
         self.elastircFactory = elastircFactory
         self.template_GET = ElastircSearchTemplate(self.elastircFactory.channels)
 
     def render_GET(self, request):
+        "Show the template for the search form."
         request.setHeader('content-type', 'text/html; charset=utf8')
         return template.renderElement(request, self.template_GET)
 
     def render_POST(self, request):
+        "Perform the actual search."
         indexes = None
         if 'index' in request.args:
             indexes = [index + '*' for index in request.args.pop('index')]
