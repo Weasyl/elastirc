@@ -7,7 +7,7 @@ from twisted.internet import protocol, defer
 from twisted.python.filepath import FilePath
 from twisted.python.logfile import BaseLogFile
 from twisted.python import log
-from twisted.web.resource import Resource
+from twisted.web.resource import Resource, ForbiddenResource
 from twisted.web import template, static
 from twisted.words.protocols import irc
 from txes.elasticsearch import ElasticSearch
@@ -27,6 +27,9 @@ def fixupMessage(message):
 
 DATE_FORMAT = '%F'
 TIME_FORMAT = '%T'
+
+def unprefixedChannel(channel):
+    return channel.lstrip('#&')
 
 
 class NiceBulkingElasticSearch(ElasticSearch):
@@ -252,7 +255,7 @@ class ElastircFactory(protocol.ReconnectingClientFactory):
         `logFactory` attribute first.
         """
 
-        channel = channel.lstrip('#&')
+        channel = unprefixedChannel(channel)
         ret = self.logfiles.get(channel)
         if not ret:
             thisLogDir = self.logDir.child(channel)
@@ -273,7 +276,7 @@ class ElastircFactory(protocol.ReconnectingClientFactory):
 
         if channel not in self.channels:
             return
-        channel = channel.lstrip('#&')
+        channel = unprefixedChannel(channel)
         now = datetime.datetime.now()
         document['receivedAt'] = now.isoformat()
         self.getLogFile(channel).write(
@@ -291,7 +294,8 @@ class ElastircFactory(protocol.ReconnectingClientFactory):
 
         root = Resource()
         root.putChild('', ElastircSearchResource(self))
-        root.putChild('logs', static.File(self.logDir.path, defaultType='text/plain; charset=utf-8'))
+        logDirResource = static.File(self.logDir.path, defaultType='text/plain; charset=utf-8')
+        root.putChild('logs', ElastircLogsResource(logDirResource))
         return root
 
 
@@ -308,7 +312,7 @@ class ElastircSearchTemplate(template.Element):
     def channels(self, request, tag):
         "Drop in each searchable channel."
         for channel in self.channelNames:
-            yield tag.clone().fillSlots(channel=channel, indexName=channel.lstrip('#&'))
+            yield tag.clone().fillSlots(channel=channel, indexName=unprefixedChannel(channel))
 
 
 class ElastircSearchResultFileTemplate(template.Element):
@@ -368,9 +372,14 @@ class ElastircSearchResultsTemplate(template.Element):
 class ElastircSearchResource(Resource):
     "A Resource for searching the ElasticSearch backend."
 
-    def __init__(self, elastircFactory):
+    def __init__(self, elastircFactory, channels=None):
+        Resource.__init__(self)
         self.elastircFactory = elastircFactory
-        self.template_GET = ElastircSearchTemplate(self.elastircFactory.channels)
+        if channels is None:
+            channels = self.elastircFactory.channels
+        self.channels = set(channels)
+        self.indexes = set(unprefixedChannel(channel) for channel in self.channels)
+        self.template_GET = ElastircSearchTemplate(self.channels)
 
     def render_GET(self, request):
         "Show the template for the search form."
@@ -379,9 +388,10 @@ class ElastircSearchResource(Resource):
 
     def render_POST(self, request):
         "Perform the actual search."
-        indexes = None
+        indexes = self.indexes
         if 'index' in request.args:
-            indexes = [index + '*' for index in request.args.pop('index')]
+            indexes.intersection_update(request.args.pop('index'))
+        index_wildcards = [index + '.*' for index in indexes]
 
         queryArgs = dict((k, v[0]) for k, v in request.args.iteritems() if k in ('actor', 'formatted') and any(v))
         if not queryArgs:
@@ -395,4 +405,18 @@ class ElastircSearchResource(Resource):
         return template.renderElement(
             request,
             ElastircSearchResultsTemplate(
-                self.elastircFactory.elasticSearch.search(query, indexes=indexes, docType='irc')))
+                self.elastircFactory.elasticSearch.search(query, indexes=index_wildcards, docType='irc')))
+
+class ElastircLogsResource(Resource):
+    def __init__(self, logDirResource, allowed=None):
+        Resource.__init__(self)
+        self.logDirResource = logDirResource
+        self.allowed = allowed
+
+    def render(self, request):
+        return ForbiddenResource().render(request)
+
+    def getChild(self, name, request):
+        if not name or (self.allowed is not None and name not in self.allowed):
+            return ForbiddenResource()
+        return self.logDirResource.getChildWithDefault(name, request)

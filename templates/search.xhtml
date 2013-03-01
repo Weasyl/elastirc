@@ -18,6 +18,14 @@
       <input type="submit" name="submit" value="Search" />
     </fieldset>
   </form>
-  <p>Alternately, you could <a href="/logs">browse the logs</a>.</p>
+  <p>Alternately, you could browse the logs:</p>
+  <ul>
+    <li t:render="channels">
+      <a>
+        <t:attr name="href">logs/<t:slot name="indexName" /></t:attr>
+        <t:slot name="channel" />
+      </a>
+    </li>
+  </ul>
 </body>
 </html>
