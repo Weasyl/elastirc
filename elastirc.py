@@ -3,16 +3,18 @@
 
 from __future__ import division
 
+from twisted.cred.portal import IRealm
 from twisted.internet import protocol, defer
 from twisted.python.filepath import FilePath
 from twisted.python.logfile import BaseLogFile
 from twisted.python import log
-from twisted.web.resource import Resource, ForbiddenResource
+from twisted.web.resource import Resource, ForbiddenResource, IResource
 from twisted.web import template, static
 from twisted.words.protocols import irc
 from txes.elasticsearch import ElasticSearch
 
 from dateutil.parser import parse as parseTimestamp
+from zope.interface import implementer
 
 import collections
 import datetime
@@ -234,6 +236,7 @@ class ElastircProtocol(_IRCBase):
                 nick, '+' if polarity else '-', modes, ' '.join(arg for arg in args if arg)))
 
 
+@implementer(IRealm)
 class ElastircFactory(protocol.ReconnectingClientFactory):
     protocol = ElastircProtocol
     logFactory = DatestampedLogFile
@@ -241,12 +244,14 @@ class ElastircFactory(protocol.ReconnectingClientFactory):
     channel = None
     channels = None
 
-    def __init__(self, logDir, elasticSearch):
+    def __init__(self, logDir, elasticSearch, userAllowedChannels=None):
         self.logDir = logDir
         self.elasticSearch = elasticSearch
         self.logfiles = {}
         if self.channels is None:
             self.channels = self.channel,
+        self.logDirResource = static.File(self.logDir.path, defaultType='text/plain; charset=utf-8')
+        self.userAllowedChannels = userAllowedChannels
 
     def getLogFile(self, channel):
         """Return the LogFile for the given channel.
@@ -285,18 +290,27 @@ class ElastircFactory(protocol.ReconnectingClientFactory):
             document, '%s.%s' % (channel, now.strftime(DATE_FORMAT)), 'irc', bulk=True)
         d.addErrback(log.err, 'error indexing')
 
-    def buildWebResource(self):
+    def buildWebResource(self, allowedChannels=None):
         """Make a Resource that exposes logs and log search.
 
         The plaintext logs are available under `/logs` and the search is
-        available at `/`.
+        available at `/`. If `allowedChannels` is provided, search and log
+        browsing will be limited to only those channels.
         """
 
         root = Resource()
-        root.putChild('', ElastircSearchResource(self))
-        logDirResource = static.File(self.logDir.path, defaultType='text/plain; charset=utf-8')
-        root.putChild('logs', ElastircLogsResource(logDirResource))
+        root.putChild('', ElastircSearchResource(self, allowedChannels))
+        root.putChild('logs', ElastircLogsResource(self.logDirResource, allowedChannels))
         return root
+
+    def requestAvatar(self, username, mind, *interfaces):
+        if IResource not in interfaces or self.userAllowedChannels is None:
+            raise NotImplementedError()
+        if not self.userAllowedChannels.get(username):
+            ret = ForbiddenResource()
+        else:
+            ret = self.buildWebResource(self.userAllowedChannels[username])
+        return IResource, ret, lambda: None
 
 
 class ElastircSearchTemplate(template.Element):
@@ -408,9 +422,12 @@ class ElastircSearchResource(Resource):
                 self.elastircFactory.elasticSearch.search(query, indexes=index_wildcards, docType='irc')))
 
 class ElastircLogsResource(Resource):
-    def __init__(self, logDirResource, allowed=None):
+    def __init__(self, logDirResource, allowedChannels=None):
         Resource.__init__(self)
         self.logDirResource = logDirResource
+        allowed = allowedChannels
+        if allowed is not None:
+            allowed = set(unprefixedChannel(channel) for channel in allowedChannels)
         self.allowed = allowed
 
     def render(self, request):
