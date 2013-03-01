@@ -12,6 +12,7 @@ from twisted.web.http import PotentialDataLoss
 from twisted.web.http_headers import Headers
 
 import json
+import time
 
 
 class StringReceiver(protocol.Protocol):
@@ -62,8 +63,11 @@ class WeasylAPIChecker(object):
     credentialInterfaces = IUsernamePassword,
     weasylInfoAPI = 'https://www.weasyl.com/api/whoami'
 
-    def __init__(self, agent):
+    def __init__(self, agent, cacheLength=None):
         self.agent = agent
+        self.cacheLength = cacheLength
+        self._cache = {}
+        self._fetching = {}
 
     def requestAvatarId(self, credentials):
         """Authenticate a user against the Weasyl API.
@@ -77,6 +81,22 @@ class WeasylAPIChecker(object):
         returned an unexpected code.
         """
 
+        credKey = credentials.username, credentials.password
+        if credKey in self._cache and self.cacheLength is not None:
+            cachedAt, value = self._cache[credKey]
+            if cachedAt + self.cacheLength > time.time():
+                return defer.succeed(value)
+            del self._cache[credKey]
+
+        d = defer.Deferred()
+        if credKey in self._fetching:
+            self._fetching[credKey].append(d)
+        else:
+            self._requestAvatarIdFromWeasyl(credentials, credKey)
+            self._fetching[credKey] = [d]
+        return d
+
+    def _requestAvatarIdFromWeasyl(self, credentials, credKey):
         headers = Headers()
         headers.addRawHeader('x-weasyl-api-key', credentials.password)
         d = self.agent.request('GET', self.weasylInfoAPI, headers)
@@ -84,7 +104,7 @@ class WeasylAPIChecker(object):
         d.addCallback(receive, StringReceiver())
         d.addCallback(json.loads)
         d.addCallback(self._verifyUsername, credentials.username)
-        return d
+        d.addBoth(self._gotResult, credKey)
 
     def _trapBadStatuses(self, response):
         if response.code == 403:
@@ -98,3 +118,9 @@ class WeasylAPIChecker(object):
         if login != username.lower():
             raise UnauthorizedLogin()
         return login
+
+    def _gotResult(self, result, credKey):
+        if self.cacheLength is not None:
+            self._cache[credKey] = time.time(), result
+        for d in self._fetching.pop(credKey):
+            d.callback(result)
