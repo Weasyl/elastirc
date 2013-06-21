@@ -9,8 +9,8 @@
       <input type="text" name="formatted" />
       <t:transparent t:render="channels">
         <label>
-          <input type="checkbox" name="index">
-            <t:attr name="value"><t:slot name="indexName" /></t:attr>
+          <input type="checkbox" name="channel">
+            <t:attr name="value"><t:slot name="channelName" /></t:attr>
           </input>
           <t:slot name="channel" />
         </label>
@@ -22,7 +22,7 @@
   <ul>
     <li t:render="channels">
       <a>
-        <t:attr name="href">logs/<t:slot name="indexName" />/</t:attr>
+        <t:attr name="href">logs/<t:slot name="channelName" />/</t:attr>
         <t:slot name="channel" />
       </a>
     </li>

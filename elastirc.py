@@ -4,23 +4,23 @@
 from __future__ import division
 
 from twisted.cred.portal import IRealm
-from twisted.internet import protocol, defer
+from twisted.internet import protocol
 from twisted.python.filepath import FilePath
 from twisted.python.logfile import BaseLogFile
-from twisted.python import log
 from twisted.web.resource import Resource, ForbiddenResource, IResource
 from twisted.web import template, static
 from twisted.words.protocols import irc
-from txes.elasticsearch import ElasticSearch
 
-from dateutil.parser import parse as parseTimestamp
 from zope.interface import implementer
+import whoosh.fields
+from whoosh.qparser import QueryParser
+from whoosh import query
 
 import collections
 import datetime
+import operator
 import os.path
 import re
-import tempfile
 
 
 ircFormattingCruftRegexp = re.compile('\x03[0-9]{1,2}(?:,[0-9]{1,2})?|[\x00-\x08\x0A-\x1F]')
@@ -34,39 +34,19 @@ def unprefixedChannel(channel):
     return channel.lstrip('#&')
 
 
-class NiceBulkingElasticSearch(ElasticSearch):
-    """An ElasticSearch interface which is kinder about bulk updates.
+whooshSchema = whoosh.fields.Schema(
+    formatted=whoosh.fields.TEXT(stored=True),
+    receivedAt=whoosh.fields.DATETIME(stored=True),
+    channel=whoosh.fields.ID(stored=True),
+    actor=whoosh.fields.ID(),
 
-    The ElasticSearch interface in txes can lose data in failure cases because
-    the bulk data isn't saved on errback. This subclass will instead save the
-    requests so they can be retried later. To enable request saving, set the
-    `failedBulkDataDirectory` attribute to some path.
-    """
+    message=whoosh.fields.TEXT(),
+    topic=whoosh.fields.TEXT(),
+    reason=whoosh.fields.TEXT(),
+    oldName=whoosh.fields.ID(),
+    kicker=whoosh.fields.ID(),
+)
 
-    failedBulkDataDirectory = None
-
-    def _logFailedBulkData(self, reason, data):
-        "Write out a bulk data request to a file and log the error."
-        now = datetime.datetime.now()
-        with tempfile.NamedTemporaryFile(prefix=now.isoformat() + '_',
-                                         dir=self.failedBulkDataDirectory,
-                                         delete=False) as outfile:
-            outfile.write('\n'.join(data))
-        log.err(reason, 'failed to submit bulk data; request saved to %s' % (outfile.name,))
-
-    def forceBulk(self):
-        """Submit a bulk data request, potentially logging the data.
-
-        If the `failedBulkDataDirectory` attribute is set when this method is
-        called, an errback will be added that will save the request data, log
-        the error, and then pass along None.
-        """
-
-        oldBulkData = self.bulkData
-        d = super(NiceBulkingElasticSearch, self).forceBulk()
-        if self.failedBulkDataDirectory is not None:
-            d.addErrback(self._logFailedBulkData, oldBulkData)
-        return d
 
 
 class DatestampedLogFile(BaseLogFile, object):
@@ -176,12 +156,10 @@ class ElastircProtocol(_IRCBase):
 
     def privmsg(self, user, channel, message):
         nick = user.partition('!')[0]
-        message = fixupMessage(message)
         self.logDocument(channel, actor=nick, message=message, formatted='<%s> %s' % (nick, message))
 
     def action(self, user, channel, message):
         nick = user.partition('!')[0]
-        message = fixupMessage(message)
         self.logDocument(channel, actor=nick, message=message, formatted='* %s %s' % (nick, message))
 
     def userJoined(self, user, channel):
@@ -196,7 +174,6 @@ class ElastircProtocol(_IRCBase):
 
     def userQuit(self, user, quitMessage):
         nick = user.partition('!')[0]
-        quitMessage = fixupMessage(quitMessage)
         for channel, users in self.channelUsers.iteritems():
             if nick in users:
                 self.logDocument(
@@ -207,7 +184,6 @@ class ElastircProtocol(_IRCBase):
     def userKicked(self, kickee, channel, kicker, message):
         kickeeNick = kickee.partition('!')[0]
         kickerNick = kicker.partition('!')[0]
-        message = fixupMessage(message)
         self.logDocument(
             channel, actor=kickeeNick, kicker=kickerNick, reason=message,
             formatted='(-) %s was kicked by %s (%s)' % (kickeeNick, kickerNick, message))
@@ -223,7 +199,6 @@ class ElastircProtocol(_IRCBase):
 
     def topicUpdated(self, user, channel, newTopic):
         nick = user.partition('!')[0]
-        newTopic = fixupMessage(newTopic)
         self.logDocument(
             channel, actor=nick, topic=newTopic,
             formatted='(-) %s changed topic to %s' % (nick, newTopic))
@@ -244,9 +219,9 @@ class ElastircFactory(protocol.ReconnectingClientFactory):
     channel = None
     channels = None
 
-    def __init__(self, logDir, elasticSearch, userAllowedChannels=None):
+    def __init__(self, logDir, writer, userAllowedChannels=None):
         self.logDir = logDir
-        self.elasticSearch = elasticSearch
+        self.writer = writer
         self.logfiles = {}
         if self.channels is None:
             self.channels = self.channel,
@@ -283,12 +258,13 @@ class ElastircFactory(protocol.ReconnectingClientFactory):
             return
         channel = unprefixedChannel(channel)
         now = datetime.datetime.now()
-        document['receivedAt'] = now.isoformat()
+        for k, v in document.iteritems():
+            document[k] = fixupMessage(v)
         self.getLogFile(channel).write(
             '%s %s\n' % (now.strftime(TIME_FORMAT), document['formatted'].encode('utf-8')))
-        d = self.elasticSearch.index(
-            document, '%s.%s' % (channel, now.strftime(DATE_FORMAT)), 'irc', bulk=True)
-        d.addErrback(log.err, 'error indexing')
+        document['receivedAt'] = now
+        document['channel'] = channel.decode()
+        self.writer.add_document(**document)
 
     def buildWebResource(self, allowedChannels=None):
         """Make a Resource that exposes logs and log search.
@@ -326,7 +302,7 @@ class ElastircSearchTemplate(template.Element):
     def channels(self, request, tag):
         "Drop in each searchable channel."
         for channel in self.channelNames:
-            yield tag.clone().fillSlots(channel=channel, indexName=unprefixedChannel(channel))
+            yield tag.clone().fillSlots(channel=channel, channelName=unprefixedChannel(channel))
 
 
 class ElastircSearchResultFileTemplate(template.Element):
@@ -334,28 +310,28 @@ class ElastircSearchResultFileTemplate(template.Element):
 
     loader = template.XMLFile(FilePath('templates/search-result-file.xhtml'))
 
-    def __init__(self, index, hits):
+    def __init__(self, logfile, hits):
         template.Element.__init__(self)
-        self.index = index
+        self.logfile = logfile
         self.hits = hits
-        self.channel = self.index.rsplit('.', 1)[0]
 
     @template.renderer
     def content(self, request, tag):
         "Drop in information about the log file."
+        channel, logDate = self.logfile
+        logName = '%s.%s' % (channel, logDate.strftime(DATE_FORMAT))
         return tag.fillSlots(
-            index=self.index,
-            channel=self.channel,
-            logPath='/logs/%s/%s' % (self.channel, self.index))
+            logName=logName,
+            logPath='/logs/%s/%s' % (channel, logName))
 
     @template.renderer
     def logLines(self, request, tag):
         "Drop in each matched line from the log file."
+        self.hits.sort(key=operator.itemgetter('receivedAt'))
         for result in self.hits:
-            timestamp = parseTimestamp(result['_source']['receivedAt'])
             yield tag.clone().fillSlots(
-                timestamp=timestamp.strftime(TIME_FORMAT),
-                **result['_source'])
+                timestamp=result['receivedAt'].strftime(TIME_FORMAT),
+                **result)
 
 
 class ElastircSearchResultsTemplate(template.Element):
@@ -363,24 +339,22 @@ class ElastircSearchResultsTemplate(template.Element):
 
     loader = template.XMLFile(FilePath('templates/search-results.xhtml'))
 
-    def __init__(self, resultsDeferred):
+    def __init__(self, searchResults):
         template.Element.__init__(self)
-        self.resultsDeferred = resultsDeferred
+        self.searchResults = searchResults
 
     @template.renderer
-    @defer.inlineCallbacks
     def results(self, request, tag):
-        "Drop in the results of the search after the results deferred fires."
-        results = yield self.resultsDeferred
-        resultsByIndex = collections.defaultdict(list)
-        for result in results['hits']['hits']:
-            resultsByIndex[result['_index']].append(result)
+        resultsByChannel = collections.defaultdict(list)
+        for result in self.searchResults:
+            logfile = result['channel'], result['receivedAt'].date()
+            resultsByChannel[logfile].append(result)
 
         ret = []
-        for index, hits in resultsByIndex.iteritems():
-            ret.append(ElastircSearchResultFileTemplate(index, hits))
-        ret.append(tag.fillSlots(took='%0.3g' % (results['took'] / 1000,)))
-        defer.returnValue(ret)
+        for logfile, hits in resultsByChannel.iteritems():
+            ret.append(ElastircSearchResultFileTemplate(logfile, hits))
+        ret.append(tag.fillSlots(took='%0.3g' % (self.searchResults.runtime,)))
+        return ret
 
 
 class ElastircSearchResource(Resource):
@@ -392,7 +366,7 @@ class ElastircSearchResource(Resource):
         if channels is None:
             channels = self.elastircFactory.channels
         self.channels = set(channels)
-        self.indexes = set(unprefixedChannel(channel) for channel in self.channels)
+        self.unprefixedChannels = set(unprefixedChannel(channel) for channel in self.channels)
         self.template_GET = ElastircSearchTemplate(self.channels)
 
     def render_GET(self, request):
@@ -402,24 +376,26 @@ class ElastircSearchResource(Resource):
 
     def render_POST(self, request):
         "Perform the actual search."
-        indexes = self.indexes
-        if 'index' in request.args:
-            indexes.intersection_update(request.args.pop('index'))
-        index_wildcards = [index + '.*' for index in indexes]
-
-        queryArgs = dict((k, v[0]) for k, v in request.args.iteritems() if k in ('actor', 'formatted') and any(v))
-        if not queryArgs:
+        channels = self.unprefixedChannels
+        if 'channel' in request.args:
+            channels.intersection_update(request.args.pop('channel'))
+        queryArgs = dict(
+            (k, v[0].decode('utf-8', 'replace'))
+            for k, v in request.args.iteritems()
+            if k in ('actor', 'formatted') and any(v))
+        if not queryArgs or not channels:
             return self.render_GET(request)
-        query = {
-            'query': {'wildcard': queryArgs},
-            'sort': [{'receivedAt': 'desc'}],
-        }
+
+        q = query.And([
+            query.Or([query.Term('channel', channel.decode('utf-8', 'replace')) for channel in channels]),
+            query.And([QueryParser(k, schema=whooshSchema).parse(v) for k, v in queryArgs.iteritems()]),
+        ])
 
         request.setHeader('content-type', 'text/html; charset=utf-8')
-        return template.renderElement(
-            request,
-            ElastircSearchResultsTemplate(
-                self.elastircFactory.elasticSearch.search(query, indexes=index_wildcards, docType='irc')))
+        with self.elastircFactory.writer.searcher() as s:
+            results = s.search(q)
+            return template.renderElement(request, ElastircSearchResultsTemplate(results))
+
 
 class ElastircLogsResource(Resource):
     def __init__(self, logDirResource, allowedChannels=None):
