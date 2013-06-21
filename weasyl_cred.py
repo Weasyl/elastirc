@@ -114,7 +114,7 @@ class WeasylAPIChecker(object):
         return response
 
     def _verifyUsername(self, userinfo, username):
-        login = userinfo['login'].encode('utf-8')
+        login = userinfo['login'].encode('utf-8').lower()
         if login != username.lower():
             raise UnauthorizedLogin()
         return login
