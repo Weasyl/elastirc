@@ -9,6 +9,9 @@ from twisted.internet import ssl, reactor
 from twisted.python import filepath
 from twisted.web.server import Site
 
+from whoosh.filedb.filestore import FileStorage
+from whoosh.writing import BufferedWriter
+
 class Elastirc(elastirc.ElastircProtocol):
     nickname = 'elastirc'
 
@@ -18,12 +21,12 @@ class ElastircFactory(elastirc.ElastircFactory):
 
 application = service.Application("elastirc")
 
-elasticSearch = elastirc.NiceBulkingElasticSearch()
-elasticSearch.failedBulkDataDirectory = 'bulk-failures'
-internet.TimerService(600, elasticSearch.forceBulk).setServiceParent(application)
-reactor.addSystemEventTrigger('before', 'shutdown', elasticSearch.forceBulk)
+logStorage = FileStorage('logindex')
+index = logStorage.open_index()
+writer = BufferedWriter(index, period=10, limit=10)
+reactor.addSystemEventTrigger('before', 'shutdown', writer.commit)
 
-elastircFac = ElastircFactory(filepath.FilePath('logs'), elasticSearch)
+elastircFac = ElastircFactory(filepath.FilePath('logs'), writer)
 site = Site(elastircFac.buildWebResource())
 sslFac = ssl.ClientContextFactory()
 internet.SSLClient('irc.esper.net', 6697, elastircFac, sslFac).setServiceParent(application)
