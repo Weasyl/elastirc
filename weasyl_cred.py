@@ -107,7 +107,7 @@ class WeasylAPIChecker(object):
         d.addBoth(self._gotResult, credKey)
 
     def _trapBadStatuses(self, response):
-        if response.code == 403:
+        if response.code in (401, 403):
             raise UnauthorizedLogin()
         elif response.code != 200:
             raise WeirdHTTPStatusError(response.code, response.phrase)
